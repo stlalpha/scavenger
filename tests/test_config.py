@@ -27,3 +27,23 @@ def test_missing_file_raises():
 def test_db_path_is_expanded():
     config = load_config(FIXTURES / "valid_config.toml")
     assert not str(config.db_path).startswith("~")
+
+def test_missing_id_raises():
+    with pytest.raises(ConfigError):
+        load_config(FIXTURES / "invalid_missing_id.toml")
+
+def test_bad_priority_raises():
+    with pytest.raises(ConfigError):
+        load_config(FIXTURES / "invalid_bad_priority.toml")
+
+def test_socket_path_is_expanded():
+    config = load_config(FIXTURES / "valid_config.toml")
+    assert not str(config.socket_path).startswith("~")
+    assert config.socket_path.is_absolute()
+
+def test_global_defaults_when_no_global_section(tmp_path):
+    cfg = tmp_path / "minimal.toml"
+    cfg.write_text('[[profiles]]\nid = "p1"\nname = "Test"\nkeywords = ["test"]\nnegative_keywords = []\nsources = ["ebay"]\n')
+    config = load_config(cfg)
+    assert "scavenger" in str(config.db_path)
+    assert config.log_level == "INFO"

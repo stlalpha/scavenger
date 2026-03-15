@@ -1,0 +1,7 @@
+[[profiles]]
+id = "p1"
+name = "Bad Priority"
+keywords = ["test"]
+negative_keywords = []
+sources = ["ebay"]
+alert_priority = "bogus_priority"
