@@ -13,12 +13,16 @@ class SocketServer:
         self._path = socket_path
         self._server: asyncio.Server | None = None
         self._poll_handler: PollHandler | None = None
+        self._shutdown_handler: Callable[[], None] | None = None
 
     def register_poll_handler(self, handler: PollHandler) -> None:
         self._poll_handler = handler
 
+    def register_shutdown_handler(self, handler: Callable[[], None]) -> None:
+        self._shutdown_handler = handler
+
     async def start(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self._path.exists():
             self._path.unlink()
         self._server = await asyncio.start_unix_server(self._handle, path=str(self._path))
@@ -61,5 +65,7 @@ class SocketServer:
                 asyncio.create_task(self._poll_handler(profile_id))
             return {"status": "ok", "data": {"profile_id": profile_id}}
         elif cmd == "shutdown":
+            if self._shutdown_handler:
+                self._shutdown_handler()
             return {"status": "ok", "data": {"message": "shutting down"}}
         return {"status": "error", "message": f"unknown command: {cmd}"}

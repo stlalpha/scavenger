@@ -83,7 +83,7 @@ class Database:
         self._conn: aiosqlite.Connection | None = None
 
     async def init(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._conn = await aiosqlite.connect(self.path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(SCHEMA)
@@ -96,36 +96,39 @@ class Database:
 
     async def upsert_listing(self, listing: Listing) -> bool:
         """Returns True if listing is new."""
-        existing = await self.get_listing(listing.id)
-        if existing is None:
-            row = _listing_to_row(listing)
-            await self._conn.execute(
-                """INSERT INTO listings VALUES (
-                    :id, :profile_id, :source_id, :title, :description,
-                    :price, :currency, :condition, :url, :image_urls,
-                    :location, :first_seen, :last_seen, :relevance_score, :status
-                )""",
-                row,
-            )
+        row = _listing_to_row(listing)
+        cursor = await self._conn.execute(
+            """INSERT OR IGNORE INTO listings VALUES (
+                :id, :profile_id, :source_id, :title, :description,
+                :price, :currency, :condition, :url, :image_urls,
+                :location, :first_seen, :last_seen, :relevance_score, :status
+            )""",
+            row,
+        )
+        is_new = cursor.rowcount == 1
+        if is_new:
             if listing.price is not None:
                 await self._conn.execute(
                     "INSERT INTO price_history (listing_id, price, observed_at) VALUES (?, ?, ?)",
                     (listing.id, listing.price, _now_iso()),
                 )
-            await self._conn.commit()
-            return True
         else:
             await self._conn.execute(
                 "UPDATE listings SET last_seen=? WHERE id=?",
                 (listing.last_seen.isoformat(), listing.id),
             )
-            if listing.price is not None and listing.price != existing.price:
+            # Check current price for history tracking
+            cursor2 = await self._conn.execute(
+                "SELECT price FROM listings WHERE id=?", (listing.id,)
+            )
+            existing_row = await cursor2.fetchone()
+            if existing_row and listing.price is not None and listing.price != existing_row[0]:
                 await self._conn.execute(
                     "INSERT INTO price_history (listing_id, price, observed_at) VALUES (?, ?, ?)",
                     (listing.id, listing.price, _now_iso()),
                 )
-            await self._conn.commit()
-            return False
+        await self._conn.commit()
+        return is_new
 
     async def get_listing(self, listing_id: str) -> Listing | None:
         cursor = await self._conn.execute(

@@ -13,6 +13,7 @@ DEFAULT_CONFIG = Path("~/.config/scavenger/config.toml").expanduser()
 
 def _send(socket_path: Path, command: dict) -> dict:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5.0)
     try:
         sock.connect(str(socket_path))
         sock.sendall(json.dumps(command).encode() + b"\n")
@@ -22,6 +23,8 @@ def _send(socket_path: Path, command: dict) -> dict:
             if not chunk:
                 break
             data += chunk
+            if len(data) > 65536:  # 64KB max response
+                return {"status": "error", "message": "Response too large"}
         return json.loads(data)
     except FileNotFoundError:
         return {"status": "error", "message": "Daemon not running"}

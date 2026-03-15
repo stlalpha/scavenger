@@ -66,14 +66,20 @@ class Daemon:
     async def run(self) -> None:
         await self._db.init()
         await self._scheduler.start()
-        await self._socket_server.start()
-        self._socket_server.register_poll_handler(self._handle_poll_command)
-        self._register_profiles()
-        logger.info("Daemon started")
         stop_event = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, stop_event.set)
+        # Register handlers BEFORE starting the socket so no command arrives unhandled
+        self._socket_server.register_poll_handler(self._handle_poll_command)
+        self._socket_server.register_shutdown_handler(stop_event.set)
+        await self._socket_server.start()
+        self._register_profiles()
+        logger.info(
+            "Daemon started — socket: %s, profiles: %d",
+            self._config.socket_path,
+            len([p for p in self._config.profiles if p.enabled]),
+        )
         await stop_event.wait()
         await self.shutdown()
 

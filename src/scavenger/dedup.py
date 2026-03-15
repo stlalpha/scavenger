@@ -18,4 +18,9 @@ def normalize_url(url: str) -> str:
 
 
 def content_hash(url: str) -> str:
+    """Return a stable SHA-256 hex digest of the normalized URL.
+
+    Used as a listing's primary key. Hashes the URL (not content)
+    so the same listing at the same URL is always the same ID.
+    """
     return hashlib.sha256(normalize_url(url).encode()).hexdigest()

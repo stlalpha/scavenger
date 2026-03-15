@@ -18,7 +18,7 @@ class Listing(BaseModel):
     first_seen: datetime
     last_seen: datetime
     relevance_score: float = 0.0
-    status: str = "new"
+    status: Literal["new", "seen", "saved", "dismissed"] = "new"
 
 
 class Profile(BaseModel):

@@ -1,3 +1,4 @@
+import asyncio
 import re
 import logging
 from datetime import datetime, timezone
@@ -29,10 +30,11 @@ class CraigslistPlugin:
         keywords = " ".join(
             kw if isinstance(kw, str) else " ".join(kw) for kw in profile.keywords
         )
-        listings = []
-        for city in self._cities:
-            listings.extend(await self._fetch_city(city, keywords, profile))
-        return listings
+        results = await asyncio.gather(
+            *[self._fetch_city(city, keywords, profile) for city in self._cities],
+            return_exceptions=False,
+        )
+        return [listing for city_listings in results for listing in city_listings]
 
     async def _fetch_city(self, city: str, keywords: str, profile: Profile) -> list[Listing]:
         url = f"https://{city}.craigslist.org/search/sss"
