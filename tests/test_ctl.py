@@ -8,8 +8,8 @@ def test_help():
 
 def test_list_profiles_missing_config(tmp_path):
     result = CliRunner().invoke(cli, ["--config", str(tmp_path / "nope.toml"), "list-profiles"])
-    # Should fail cleanly (non-zero exit or error message)
-    assert result.exit_code != 0 or "error" in result.output.lower() or "not found" in result.output.lower()
+    assert result.exit_code != 0
+    assert "error" in result.output.lower() or "not found" in result.output.lower()
 
 def test_list_profiles_with_config(tmp_path):
     cfg = tmp_path / "config.toml"

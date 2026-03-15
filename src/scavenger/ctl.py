@@ -12,8 +12,8 @@ DEFAULT_CONFIG = Path("~/.config/scavenger/config.toml").expanduser()
 
 
 def _send(socket_path: Path, command: dict) -> dict:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.connect(str(socket_path))
         sock.sendall(json.dumps(command).encode() + b"\n")
         data = b""
@@ -22,12 +22,15 @@ def _send(socket_path: Path, command: dict) -> dict:
             if not chunk:
                 break
             data += chunk
-        sock.close()
         return json.loads(data)
     except FileNotFoundError:
         return {"status": "error", "message": "Daemon not running"}
     except ConnectionRefusedError:
         return {"status": "error", "message": "Daemon not running"}
+    except OSError as e:
+        return {"status": "error", "message": f"Socket error: {e}"}
+    finally:
+        sock.close()
 
 
 @click.group()

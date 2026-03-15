@@ -58,7 +58,9 @@ class Daemon:
                 await self._db.update_source_state(source_id, last_polled=datetime.now(timezone.utc))
             except Exception:
                 logger.exception("Poll failed for %s/%s", profile.id, source_id)
-                await self._db.update_source_state(source_id, consecutive_errors=1)
+                state = await self._db.get_source_state(source_id)
+                current_errors = state["consecutive_errors"] if state else 0
+                await self._db.update_source_state(source_id, consecutive_errors=current_errors + 1)
         return new_listings
 
     async def run(self) -> None:

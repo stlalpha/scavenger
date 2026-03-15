@@ -158,6 +158,13 @@ class Database:
         )
         return [dict(row) for row in await cursor.fetchall()]
 
+    async def get_source_state(self, plugin_id: str) -> dict | None:
+        cursor = await self._conn.execute(
+            "SELECT * FROM sources WHERE plugin_id=?", (plugin_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
     async def update_source_state(
         self,
         plugin_id: str,
