@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>eBay Search Results</title>
+    <item>
+      <title><![CDATA[Sony 85mm f/1.4 A-mount Lens - Excellent]]></title>
+      <link>https://www.ebay.com/itm/123456789012</link>
+      <description><![CDATA[Beautiful Sony A-mount 85mm f/1.4. No fungus. $249.99]]></description>
+      <pubDate>Sun, 15 Mar 2026 10:00:00 +0000</pubDate>
+      <enclosure url="https://i.ebayimg.com/images/g/abc/s-l500.jpg" type="image/jpeg"/>
+    </item>
+    <item>
+      <title><![CDATA[Sony A-mount 50mm f/1.4 Zeiss]]></title>
+      <link>https://www.ebay.com/itm/987654321098</link>
+      <description><![CDATA[Sony Zeiss 50mm SSM. $399.00]]></description>
+      <pubDate>Sun, 15 Mar 2026 09:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
