@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>SF Bay - electronics</title>
+    <item>
+      <title><![CDATA[Sony A-mount 70-200mm f/2.8 G SSM - $650]]></title>
+      <link>https://sfbay.craigslist.org/eby/ele/d/7890123456.html</link>
+      <description><![CDATA[Sony A-mount 70-200mm f/2.8 G SSM. Excellent condition. Oakland.]]></description>
+      <pubDate>Sun, 15 Mar 2026 08:00:00 +0000</pubDate>
+      <enclosure url="https://images.craigslist.org/00d0d_abc_600x450.jpg" type="image/jpeg" length="0"/>
+    </item>
+    <item>
+      <title><![CDATA[Sigma A-mount 35mm f/1.4 - $200]]></title>
+      <link>https://sfbay.craigslist.org/eby/ele/d/1234567890.html</link>
+      <description><![CDATA[Sigma 35mm f/1.4 Art for Sony A-mount. Minor wear. $200.]]></description>
+      <pubDate>Sun, 15 Mar 2026 07:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
