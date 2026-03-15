@@ -19,6 +19,7 @@ class Listing(BaseModel):
     last_seen: datetime
     relevance_score: float = 0.0
     status: Literal["new", "seen", "saved", "dismissed"] = "new"
+    ai_evaluation: str | None = None  # JSON-serialized AIEvaluation, set by daemon
 
 
 class Profile(BaseModel):
