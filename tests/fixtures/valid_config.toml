@@ -1,0 +1,25 @@
+[global]
+db_path = "~/.local/share/scavenger/scavenger.db"
+log_level = "INFO"
+
+[[profiles]]
+id = "sony-glass"
+name = "Sony A-mount Glass"
+keywords = ["sony", ["a-mount", "alpha mount"]]
+negative_keywords = ["broken", "fungus"]
+sources = ["ebay", "usedphotopro"]
+price_min = 50.0
+price_max = 800.0
+alert_priority = "high"
+poll_interval_sec = 900
+enabled = true
+
+[[profiles]]
+id = "as400"
+name = "IBM AS/400"
+keywords = [["as/400", "as400", "iseries"], "ibm"]
+negative_keywords = ["parts only"]
+sources = ["ebay", "craigslist"]
+alert_priority = "high"
+poll_interval_sec = 1800
+enabled = true

@@ -1,0 +1,5 @@
+[[profiles]]
+name = "Missing ID"
+keywords = ["test"]
+sources = ["ebay"]
+alert_priority = "bogus_priority"
