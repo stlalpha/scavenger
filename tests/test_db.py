@@ -122,3 +122,32 @@ async def test_image_urls_round_trip(db):
     await db.upsert_listing(make_listing(image_urls=urls))
     fetched = await db.get_listing("abc123")
     assert fetched.image_urls == urls
+
+
+async def test_migrate_adds_ai_evaluation_column(db):
+    await db.migrate()
+    async with aiosqlite.connect(db.path) as conn:
+        cursor = await conn.execute("PRAGMA table_info(listings)")
+        columns = {row[1] for row in await cursor.fetchall()}
+    assert "ai_evaluation" in columns
+
+
+async def test_migrate_is_idempotent(db):
+    await db.migrate()
+    await db.migrate()  # second call must not raise
+
+
+async def test_ai_evaluation_persists_through_upsert(db):
+    from datetime import datetime, timezone
+    await db.migrate()
+    now = datetime.now(timezone.utc)
+    listing = Listing(
+        id="ai1", profile_id="p1", source_id="ebay",
+        title="Sony 85mm", url="https://ebay.com/ai1",
+        first_seen=now, last_seen=now, relevance_score=80.0,
+        ai_evaluation='{"relevant": true, "reason": "Great", "notable": null, "escalate": false}',
+    )
+    await db.upsert_listing(listing)
+    fetched = await db.get_listing("ai1")
+    assert fetched.ai_evaluation is not None
+    assert "Great" in fetched.ai_evaluation

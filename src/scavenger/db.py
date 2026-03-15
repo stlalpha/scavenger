@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS listings (
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
     relevance_score REAL NOT NULL DEFAULT 0.0,
-    status TEXT NOT NULL DEFAULT 'new'
+    status TEXT NOT NULL DEFAULT 'new',
+    ai_evaluation TEXT
 );
 
 CREATE TABLE IF NOT EXISTS price_history (
@@ -68,6 +69,7 @@ def _listing_to_row(listing: Listing) -> dict:
         "last_seen": listing.last_seen.isoformat(),
         "relevance_score": listing.relevance_score,
         "status": listing.status,
+        "ai_evaluation": listing.ai_evaluation,
     }
 
 
@@ -89,6 +91,16 @@ class Database:
         await self._conn.executescript(SCHEMA)
         await self._conn.commit()
 
+    async def migrate(self) -> None:
+        """Apply schema migrations idempotently."""
+        cursor = await self._conn.execute("PRAGMA table_info(listings)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "ai_evaluation" not in columns:
+            await self._conn.execute(
+                "ALTER TABLE listings ADD COLUMN ai_evaluation TEXT"
+            )
+            await self._conn.commit()
+
     async def close(self) -> None:
         if self._conn:
             await self._conn.close()
@@ -101,7 +113,8 @@ class Database:
             """INSERT OR IGNORE INTO listings VALUES (
                 :id, :profile_id, :source_id, :title, :description,
                 :price, :currency, :condition, :url, :image_urls,
-                :location, :first_seen, :last_seen, :relevance_score, :status
+                :location, :first_seen, :last_seen, :relevance_score, :status,
+                :ai_evaluation
             )""",
             row,
         )
