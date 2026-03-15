@@ -92,6 +92,7 @@ class Database:
     async def close(self) -> None:
         if self._conn:
             await self._conn.close()
+            self._conn = None
 
     async def upsert_listing(self, listing: Listing) -> bool:
         """Returns True if listing is new."""
