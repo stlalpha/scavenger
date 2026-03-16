@@ -52,17 +52,22 @@ class Daemon:
                 continue
             try:
                 fetched = await plugin.fetch(profile)
+                # Score and filter
+                scored = []
                 for listing in fetched:
                     listing.relevance_score = score_listing(
                         profile, listing.title, listing.description, listing.price
                     )
-                    if listing.relevance_score == 0.0:
+                    if listing.relevance_score > 0.0:
+                        scored.append(listing)
+                # Batch AI evaluation
+                evaluations = await self._evaluator.evaluate_batch(profile, scored)
+                for listing in scored:
+                    evaluation = evaluations.get(listing.id)
+                    if evaluation and not evaluation.relevant:
                         continue
-                    # AI evaluation
-                    evaluation = await self._evaluator.evaluate(profile, listing)
-                    if not evaluation.relevant:
-                        continue
-                    listing.ai_evaluation = evaluation.model_dump_json()
+                    if evaluation:
+                        listing.ai_evaluation = evaluation.model_dump_json()
                     if await self._db.upsert_listing(listing):
                         new_listings.append(listing)
                 await self._db.update_source_state(source_id, last_polled=datetime.now(timezone.utc))
