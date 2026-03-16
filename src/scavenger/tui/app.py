@@ -43,21 +43,36 @@ class ScavengerApp(App):
     async def _poll(self) -> None:
         if self._data_layer is None:
             return
+        from datetime import datetime, timezone
+        from scavenger.tui.widgets.status_bar import StatusBar
         try:
             listings = await self._data_layer.get_listings(
                 profile_id=self._active_profile_id, limit=100
             )
             stats = await self._data_layer.get_profile_stats()
-            self.post_message(DataUpdated(listings=listings, profile_stats=stats))
-            # Update status bar
-            from datetime import datetime, timezone
-            from scavenger.tui.widgets.status_bar import StatusBar
+            # Post to the current screen, not the app — messages don't bubble down
+            self.screen.post_message(DataUpdated(listings=listings, profile_stats=stats))
+            # Check daemon socket
+            daemon_up = self._check_daemon()
             try:
-                self.query_one(StatusBar).set_last_poll(datetime.now(timezone.utc))
+                bar = self.query_one(StatusBar)
+                bar.set_daemon_status(daemon_up)
+                bar.set_last_poll(datetime.now(timezone.utc))
             except Exception:
-                pass  # StatusBar may not be mounted yet
+                pass
         except Exception as e:
             logger.warning("Poll error: %s", e)
+
+    def _check_daemon(self) -> bool:
+        import socket as _socket
+        try:
+            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            s.connect(str(self._config.socket_path))
+            s.close()
+            return True
+        except Exception:
+            return False
 
     async def on_load(self) -> None:
         self._db = Database(self._config.db_path)
