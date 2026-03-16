@@ -76,6 +76,10 @@ class ResultsFeed(Widget):
             return self._listings[self.cursor]
         return None
 
+    def invalidate_fingerprint(self) -> None:
+        """Force next update_listings to re-render even if IDs haven't changed."""
+        self._listing_fingerprint = ""
+
     async def update_listings(self, listings: list[Listing]) -> None:
         # Skip full re-render if nothing changed (id + status is enough to detect changes)
         fingerprint = "|".join(f"{l.id}:{l.status}" for l in listings)

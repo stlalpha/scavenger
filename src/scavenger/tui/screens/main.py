@@ -47,6 +47,9 @@ class MainScreen(Screen):
 
     def on_profile_selected(self, event: ProfileSelected) -> None:
         self.app.set_active_profile(event.profile_id)  # type: ignore[attr-defined]
+        # Clear fingerprint so the feed re-renders immediately with new profile's data
+        self.query_one(ResultsFeed).invalidate_fingerprint()
+        self.app.run_worker(self.app._poll(), exclusive=True)  # type: ignore[attr-defined]
 
     async def on_data_updated(self, event: DataUpdated) -> None:
         feed = self.query_one(ResultsFeed)
