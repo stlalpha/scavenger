@@ -10,9 +10,13 @@ from scavenger.tui.widgets.thumbnail import ThumbnailCache
 
 logger = logging.getLogger(__name__)
 
-# Import textual-image; fall back gracefully if unavailable
+# Import textual-image; prefer Kitty TGP, fall back to auto, then nothing
 try:
-    from textual_image.widget import Image as KittyImage
+    import os
+    if os.environ.get("TERM", "") == "xterm-kitty":
+        from textual_image.widget import TGPImage as KittyImage
+    else:
+        from textual_image.widget import Image as KittyImage
     HAS_IMAGE_WIDGET = True
 except ImportError:
     HAS_IMAGE_WIDGET = False
