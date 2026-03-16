@@ -1,29 +1,15 @@
 import re
 import logging
 from datetime import datetime, timezone
-from playwright.async_api import async_playwright, Browser, BrowserContext
 
 from scavenger.dedup import content_hash
 from scavenger.models import Listing, Profile
+from scavenger.plugins.browser import new_context
 
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://www.ebay.com/sch/i.html"
 PRICE_RE = re.compile(r"[\$£€]([0-9,]+(?:\.[0-9]{2})?)")
-
-# Reuse browser across polls — launched lazily, replaced if disconnected
-_browser: Browser | None = None
-_playwright_instance = None
-
-
-async def _get_browser() -> Browser:
-    global _browser, _playwright_instance
-    if _browser is None or not _browser.is_connected():
-        if _playwright_instance is None:
-            _playwright_instance = await async_playwright().start()
-        _browser = await _playwright_instance.chromium.launch(headless=True)
-        logger.info("Launched headless Chromium for eBay plugin")
-    return _browser
 
 
 def _extract_price(text: str) -> float | None:
@@ -45,21 +31,19 @@ class EbayPlugin:
             return []
 
     async def _scrape(self, keywords: str, profile: Profile) -> list[Listing]:
-        browser = await _get_browser()
-        context: BrowserContext = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 900},
-        )
+        context = await new_context()
         page = await context.new_page()
+
+        # Mask webdriver flag
+        await page.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+
         try:
             params = (
                 f"?_nkw={keywords.replace(' ', '+')}"
                 "&_sop=10"    # sort: newly listed
-                "&_ipg=50"    # 50 results per page
+                "&_ipg=50"    # 50 per page
             )
             if profile.price_min is not None:
                 params += f"&_udlo={profile.price_min:.0f}"
@@ -67,7 +51,14 @@ class EbayPlugin:
                 params += f"&_udhi={profile.price_max:.0f}"
 
             await page.goto(SEARCH_URL + params, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_selector(".s-item", timeout=10000)
+
+            # Wait for listings — eBay may show a verification page if blocked
+            try:
+                await page.wait_for_selector(".s-item", timeout=15000)
+            except Exception:
+                title = await page.title()
+                logger.warning("eBay: no listings found (page title: %r) — possible bot block", title)
+                return []
 
             items = await page.query_selector_all(".s-item")
             listings = []
@@ -86,7 +77,6 @@ class EbayPlugin:
                     title = (await title_el.inner_text()).strip()
                     url = (await link_el.get_attribute("href") or "").split("?")[0]
 
-                    # Skip the "Shop on eBay" placeholder card
                     if "Shop on eBay" in title or not url:
                         continue
 

@@ -1,22 +1,16 @@
-import asyncio
 import re
+import asyncio
 import logging
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree as ET
-
-import httpx
 
 from scavenger.dedup import content_hash
 from scavenger.models import Listing, Profile
+from scavenger.plugins.browser import new_context
 
 logger = logging.getLogger(__name__)
+
 DEFAULT_CITIES = ["sfbay", "newyork", "losangeles", "chicago", "seattle"]
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-}
 PRICE_RE = re.compile(r"\$([0-9,]+(?:\.[0-9]{2})?)")
 
 
@@ -43,55 +37,74 @@ class CraigslistPlugin:
 
     async def _fetch_city(self, city: str, keywords: str, profile: Profile) -> list[Listing]:
         url = f"https://{city}.craigslist.org/search/sss"
+        context = await new_context()
+        page = await context.new_page()
+        await page.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
         try:
-            async with httpx.AsyncClient(timeout=30.0, headers=HEADERS) as client:
-                resp = await client.get(url, params={"query": keywords, "format": "rss"})
-                resp.raise_for_status()
-        except (httpx.HTTPError, httpx.TimeoutException) as e:
+            await page.goto(
+                f"{url}?query={keywords.replace(' ', '+')}&sort=date",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            try:
+                await page.wait_for_selector(".cl-search-result", timeout=10000)
+            except Exception:
+                logger.warning("Craigslist %s: no results found", city)
+                return []
+
+            items = await page.query_selector_all(".cl-search-result")
+            listings = []
+            now = datetime.now(timezone.utc)
+
+            for item in items:
+                try:
+                    title_el = await item.query_selector(".posting-title .label")
+                    link_el = await item.query_selector("a.posting-title")
+                    price_el = await item.query_selector(".priceinfo")
+                    img_el = await item.query_selector("img")
+
+                    if not title_el or not link_el:
+                        continue
+
+                    title = (await title_el.inner_text()).strip()
+                    item_url = await link_el.get_attribute("href") or ""
+                    if not item_url.startswith("http"):
+                        item_url = f"https://{city}.craigslist.org{item_url}"
+
+                    price_text = await price_el.inner_text() if price_el else ""
+                    price = _extract_price(price_text)
+
+                    image_url = await img_el.get_attribute("src") if img_el else None
+                    image_urls = [image_url] if image_url and not image_url.startswith("data:") else []
+
+                    listings.append(Listing(
+                        id=content_hash(item_url),
+                        profile_id=profile.id,
+                        source_id=self.plugin_id,
+                        title=title,
+                        description="",
+                        price=price,
+                        location=city,
+                        url=item_url,
+                        image_urls=image_urls,
+                        first_seen=now,
+                        last_seen=now,
+                        relevance_score=0.0,
+                    ))
+                except Exception as e:
+                    logger.debug("Skipping Craigslist item in %s: %s", city, e)
+                    continue
+
+            logger.info("Craigslist %s: found %d listings for '%s'", city, len(listings), keywords)
+            return listings
+
+        except Exception as e:
             logger.warning("Craigslist fetch failed for %s: %s", city, e)
             return []
-        return self._parse(resp.content, profile, city)
-
-    def _parse(self, content: bytes, profile: Profile, city: str) -> list[Listing]:
-        try:
-            root = ET.fromstring(content)
-        except ET.ParseError:
-            return []
-        channel = root.find("channel")
-        if channel is None:
-            return []
-        now = datetime.now(timezone.utc)
-        listings = []
-        for item in channel.findall("item"):
-            title_el, link_el = item.find("title"), item.find("link")
-            if title_el is None or link_el is None:
-                continue
-            title = title_el.text or ""
-            url = link_el.text or ""
-            desc_el = item.find("description")
-            description = desc_el.text or "" if desc_el is not None else ""
-            pub_el = item.find("pubDate")
-            try:
-                pub_date = parsedate_to_datetime(pub_el.text) if pub_el is not None and pub_el.text else now
-            except Exception:
-                pub_date = now
-            enclosure = item.find("enclosure")
-            image_urls = [enclosure.get("url")] if enclosure is not None and enclosure.get("url") else []
-            listings.append(Listing(
-                id=content_hash(url),
-                profile_id=profile.id,
-                source_id=self.plugin_id,
-                title=title,
-                description=description,
-                price=_extract_price(title) or _extract_price(description),
-                location=city,
-                url=url,
-                image_urls=image_urls,
-                first_seen=pub_date,
-                last_seen=now,
-                relevance_score=0.0,
-            ))
-        return listings
+        finally:
+            await context.close()
 
     async def supports_geo(self) -> bool:
         return True

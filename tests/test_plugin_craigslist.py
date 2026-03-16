@@ -1,15 +1,11 @@
-import pytest
-import respx
-import httpx
-from pathlib import Path
+from unittest.mock import AsyncMock, patch
+from datetime import datetime, timezone
 from scavenger.plugins.craigslist import CraigslistPlugin
-from scavenger.models import Profile
+from scavenger.models import Profile, Listing
+from scavenger.dedup import content_hash
 
-FIXTURES = Path(__file__).parent / "fixtures"
 
-
-@pytest.fixture
-def profile():
+def make_profile() -> Profile:
     return Profile(
         id="sony", name="Sony Glass",
         keywords=["sony", ["a-mount", "alpha mount"]],
@@ -18,46 +14,44 @@ def profile():
     )
 
 
-@pytest.fixture
-def plugin():
-    return CraigslistPlugin(cities=["sfbay"])
-
-
-@respx.mock
-async def test_fetch_returns_listings(plugin, profile):
-    respx.get("https://sfbay.craigslist.org/search/sss").mock(
-        return_value=httpx.Response(200, content=(FIXTURES / "craigslist_rss.xml").read_bytes())
+def make_listing(city: str = "sfbay") -> Listing:
+    now = datetime.now(timezone.utc)
+    url = f"https://{city}.craigslist.org/ele/d/test/1234567890.html"
+    return Listing(
+        id=content_hash(url), profile_id="sony", source_id="craigslist",
+        title="Sony A-mount 70-200mm f/2.8 G SSM - $650",
+        url=url, price=650.0, location=city,
+        image_urls=["https://images.craigslist.org/test.jpg"],
+        first_seen=now, last_seen=now, relevance_score=0.0,
     )
-    listings = await plugin.fetch(profile)
-    assert len(listings) == 2
 
 
-@respx.mock
-async def test_price_extracted_from_title(plugin, profile):
-    respx.get("https://sfbay.craigslist.org/search/sss").mock(
-        return_value=httpx.Response(200, content=(FIXTURES / "craigslist_rss.xml").read_bytes())
-    )
-    listings = await plugin.fetch(profile)
-    assert listings[0].price == 650.0
+async def test_fetch_calls_fetch_city(monkeypatch):
+    listings = [make_listing()]
+    plugin = CraigslistPlugin(cities=["sfbay"])
+    monkeypatch.setattr(plugin, "_fetch_city", AsyncMock(return_value=listings))
+    result = await plugin.fetch(make_profile())
+    assert result == listings
 
 
-@respx.mock
-async def test_image_extracted(plugin, profile):
-    respx.get("https://sfbay.craigslist.org/search/sss").mock(
-        return_value=httpx.Response(200, content=(FIXTURES / "craigslist_rss.xml").read_bytes())
-    )
-    listings = await plugin.fetch(profile)
-    assert len(listings[0].image_urls) == 1
+async def test_fetch_aggregates_multiple_cities(monkeypatch):
+    plugin = CraigslistPlugin(cities=["sfbay", "newyork"])
+    monkeypatch.setattr(plugin, "_fetch_city", AsyncMock(return_value=[make_listing()]))
+    result = await plugin.fetch(make_profile())
+    assert len(result) == 2
 
 
-@respx.mock
-async def test_http_error_returns_empty(plugin, profile):
-    respx.get("https://sfbay.craigslist.org/search/sss").mock(return_value=httpx.Response(500))
-    assert await plugin.fetch(profile) == []
+async def test_fetch_returns_empty_when_all_cities_fail(monkeypatch):
+    plugin = CraigslistPlugin(cities=["sfbay"])
+    # _fetch_city has its own error handling and returns [] on failure
+    monkeypatch.setattr(plugin, "_fetch_city", AsyncMock(return_value=[]))
+    result = await plugin.fetch(make_profile())
+    assert result == []
 
 
 async def test_plugin_id():
     assert CraigslistPlugin.plugin_id == "craigslist"
+
 
 async def test_supports_geo():
     assert await CraigslistPlugin(cities=["sfbay"]).supports_geo() is True
