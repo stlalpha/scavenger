@@ -206,6 +206,16 @@ class Database:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def get_existing_ids(self, listing_ids: list[str]) -> set[str]:
+        """Return the subset of listing_ids that already exist in the database."""
+        if not listing_ids:
+            return set()
+        placeholders = ",".join("?" for _ in listing_ids)
+        cursor = await self._conn.execute(
+            f"SELECT id FROM listings WHERE id IN ({placeholders})", listing_ids
+        )
+        return {row[0] for row in await cursor.fetchall()}
+
     async def count_new_by_profile(self) -> dict[str, int]:
         """Return {profile_id: count} for listings with status='new'."""
         cursor = await self._conn.execute(

@@ -52,13 +52,13 @@ class Daemon:
                 continue
             try:
                 fetched = await plugin.fetch(profile)
-                # Score, filter, and skip listings we already have
+                # Skip known listings, score the rest
+                known_ids = await self._db.get_existing_ids(
+                    [listing.id for listing in fetched]
+                )
                 scored = []
                 for listing in fetched:
-                    existing = await self._db.get_listing(listing.id)
-                    if existing:
-                        # Update last_seen but skip AI evaluation
-                        await self._db.upsert_listing(listing)
+                    if listing.id in known_ids:
                         continue
                     listing.relevance_score = score_listing(
                         profile, listing.title, listing.description, listing.price
