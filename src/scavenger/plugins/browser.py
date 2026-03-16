@@ -50,10 +50,10 @@ async def get_browser() -> Browser:
             _playwright = await async_playwright().start()
 
         try:
-            _browser = await _playwright.chromium.connect_over_cdp(CDP_URL, timeout=2000)
+            _browser = await _playwright.chromium.connect_over_cdp(CDP_URL, timeout=5000)
             logger.info("Connected to running Chrome via CDP at %s", CDP_URL)
-        except Exception:
-            logger.info("Chrome not on %s — launching system Chrome", CDP_URL)
+        except Exception as cdp_err:
+            logger.warning("CDP connect failed (%s: %s) — launching system Chrome", type(cdp_err).__name__, cdp_err)
             _browser = await _playwright.chromium.launch(
                 headless=False,
                 executable_path=SYSTEM_CHROME,
