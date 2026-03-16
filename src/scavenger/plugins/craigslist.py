@@ -39,9 +39,6 @@ class CraigslistPlugin:
         url = f"https://{city}.craigslist.org/search/sss"
         context = await new_context()
         page = await context.new_page()
-        await page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
         try:
             await page.goto(
                 f"{url}?query={keywords.replace(' ', '+')}&sort=date",

@@ -34,11 +34,6 @@ class EbayPlugin:
         context = await new_context()
         page = await context.new_page()
 
-        # Mask webdriver flag
-        await page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-
         try:
             params = (
                 f"?_nkw={keywords.replace(' ', '+')}"
