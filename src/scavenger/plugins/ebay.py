@@ -75,6 +75,18 @@ class EbayPlugin:
             listings = []
             now = datetime.now(timezone.utc)
 
+            # Debug: log first few item titles to see what's being matched/skipped
+            if not listings:
+                sample_titles = []
+                for item in items[:5]:
+                    t = await item.query_selector(".s-item__title")
+                    if t:
+                        sample_titles.append((await t.inner_text()).strip()[:60])
+                if sample_titles:
+                    logger.debug("eBay: first item titles: %s", sample_titles)
+                else:
+                    logger.debug("eBay: %d items found but none have .s-item__title", len(items))
+
             for item in items:
                 try:
                     title_el = await item.query_selector(".s-item__title")
