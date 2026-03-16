@@ -16,10 +16,12 @@ from scavenger.ai.models import AIConfig
 
 logger = logging.getLogger(__name__)
 
-BUNDLED_PLUGINS = {
-    EbayPlugin.plugin_id: EbayPlugin(),
-    CraigslistPlugin.plugin_id: CraigslistPlugin(),
-}
+def _make_plugins(config: AppConfig) -> dict:
+    home_zip = config.global_config.home_zip
+    return {
+        EbayPlugin.plugin_id: EbayPlugin(),
+        CraigslistPlugin.plugin_id: CraigslistPlugin(home_zip=home_zip),
+    }
 
 
 class Daemon:
@@ -28,7 +30,7 @@ class Daemon:
         self._db = Database(config.db_path)
         self._scheduler = PollScheduler()
         self._socket_server = SocketServer(config.socket_path)
-        self._plugins = dict(BUNDLED_PLUGINS)
+        self._plugins = _make_plugins(config)
         self._evaluator = AIEvaluator(ai_config) if (ai_config and ai_config.enabled) else NoopEvaluator()
 
     def _register_profiles(self) -> None:

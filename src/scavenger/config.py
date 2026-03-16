@@ -10,6 +10,7 @@ class GlobalConfig(BaseModel):
     image_cache_path: str = "~/.cache/scavenger/images"
     log_level: str = "INFO"
     socket_path: str = "~/.run/scavenger/daemon.sock"
+    home_zip: str | None = None
 
 
 class AppConfig(BaseModel):

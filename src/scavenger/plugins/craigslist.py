@@ -6,10 +6,9 @@ from datetime import datetime, timezone
 from scavenger.dedup import content_hash
 from scavenger.models import Listing, Profile
 from scavenger.plugins.browser import new_page
+from scavenger.plugins.craigslist_cities import cities_for_zip, NATIONAL_METROS
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_CITIES = ["sfbay", "newyork", "losangeles", "chicago", "seattle"]
 PRICE_RE = re.compile(r"\$([0-9,]+(?:\.[0-9]{2})?)")
 
 
@@ -21,8 +20,13 @@ def _extract_price(text: str) -> float | None:
 class CraigslistPlugin:
     plugin_id = "craigslist"
 
-    def __init__(self, cities: list[str] | None = None):
-        self._cities = cities or DEFAULT_CITIES
+    def __init__(self, cities: list[str] | None = None, home_zip: str | None = None):
+        if cities:
+            self._cities = cities
+        elif home_zip:
+            self._cities = cities_for_zip(home_zip)
+        else:
+            self._cities = NATIONAL_METROS
 
     async def fetch(self, profile: Profile) -> list[Listing]:
         keywords = " ".join(
