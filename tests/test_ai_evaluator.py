@@ -48,50 +48,55 @@ async def test_noop_evaluator_returns_passthrough():
 
 # --- AIEvaluator ---
 
+
+@pytest.fixture
+async def evaluator():
+    config = AIConfig(enabled=True)
+    ev = AIEvaluator(config)
+    await ev.start()
+    yield ev
+    await ev.stop()
+
+
 @respx.mock
-async def test_evaluator_parses_valid_response():
+async def test_evaluator_parses_valid_response(evaluator):
     fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
     respx.post(OLLAMA_URL).mock(return_value=ollama_response(fixture))
-    config = AIConfig(enabled=True)
-    ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
+    ev = await evaluator.evaluate(make_profile(), make_listing())
     assert ev.relevant is True
     assert ev.notable is not None
     assert "Zeiss" in ev.notable
 
 
 @respx.mock
-async def test_evaluator_returns_passthrough_on_malformed_json():
+async def test_evaluator_returns_passthrough_on_malformed_json(evaluator):
     respx.post(OLLAMA_URL).mock(return_value=httpx.Response(200, json={
         "message": {"role": "assistant", "content": "not json at all"}
     }))
-    config = AIConfig(enabled=True)
-    ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
+    ev = await evaluator.evaluate(make_profile(), make_listing())
     assert ev.relevant is True  # passthrough — never drop on error
 
 
 @respx.mock
-async def test_evaluator_returns_passthrough_on_http_error():
+async def test_evaluator_returns_passthrough_on_http_error(evaluator):
     respx.post(OLLAMA_URL).mock(return_value=httpx.Response(503))
-    config = AIConfig(enabled=True)
-    ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
+    ev = await evaluator.evaluate(make_profile(), make_listing())
     assert ev.relevant is True
 
 
 @respx.mock
-async def test_evaluator_returns_passthrough_on_timeout():
+async def test_evaluator_returns_passthrough_on_timeout(evaluator):
     respx.post(OLLAMA_URL).mock(side_effect=httpx.TimeoutException("timeout"))
-    config = AIConfig(enabled=True)
-    ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
+    ev = await evaluator.evaluate(make_profile(), make_listing())
     assert ev.relevant is True
 
 
 @respx.mock
-async def test_evaluator_not_relevant_discards():
+async def test_evaluator_not_relevant_discards(evaluator):
     respx.post(OLLAMA_URL).mock(return_value=ollama_response({
         "relevant": False, "reason": "Wrong mount", "notable": None, "escalate": False
     }))
-    config = AIConfig(enabled=True)
-    ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
+    ev = await evaluator.evaluate(make_profile(), make_listing())
     assert ev.relevant is False
 
 
@@ -105,8 +110,11 @@ async def test_escalation_second_call_fires_when_conditions_met():
         ollama_response(escalation_response),
     ])
     config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0)
-    ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
-    assert ev.escalate is True
+    ev = AIEvaluator(config)
+    await ev.start()
+    result = await ev.evaluate(make_profile(), make_listing())
+    await ev.stop()
+    assert result.escalate is True
 
 
 @respx.mock
@@ -119,29 +127,28 @@ async def test_escalation_preserves_filter_reason():
         ollama_response(escalation_response),
     ])
     config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0)
-    ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
-    # Filter's reason is preserved
-    assert ev.reason == fixture["reason"]
-    # Escalation's escalate flag is used
-    assert ev.escalate is True
+    ev = AIEvaluator(config)
+    await ev.start()
+    result = await ev.evaluate(make_profile(), make_listing())
+    await ev.stop()
+    assert result.reason == fixture["reason"]
+    assert result.escalate is True
 
 
 @respx.mock
-async def test_escalation_second_call_skipped_when_disabled():
+async def test_escalation_second_call_skipped_when_disabled(evaluator):
     fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
     fixture["escalate"] = True
     respx.post(OLLAMA_URL).mock(return_value=ollama_response(fixture))
-    config = AIConfig(enabled=True, escalation_enabled=False)
-    ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
+    ev = await evaluator.evaluate(make_profile(), make_listing())
     assert respx.calls.call_count == 1
 
 
 @respx.mock
-async def test_escalation_skipped_when_keyword_score_too_low():
+async def test_escalation_skipped_when_keyword_score_too_low(evaluator):
     fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
     fixture["escalate"] = True
     respx.post(OLLAMA_URL).mock(return_value=ollama_response(fixture))
-    config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0)
     low_score_listing = make_listing(relevance_score=50.0)
-    ev = await AIEvaluator(config).evaluate(make_profile(), low_score_listing)
+    ev = await evaluator.evaluate(make_profile(), low_score_listing)
     assert respx.calls.call_count == 1  # no escalation call

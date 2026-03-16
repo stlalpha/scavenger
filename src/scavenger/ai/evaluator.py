@@ -1,5 +1,7 @@
+import asyncio
 import json as _json
 import logging
+from dataclasses import dataclass
 import httpx
 from scavenger.ai.models import AIConfig, AIEvaluation
 from scavenger.ai.prompts import build_prompt, build_batch_prompt
@@ -18,6 +20,13 @@ def _ollama_base(config_url: str) -> str:
     return config_url.removesuffix("/v1").removesuffix("/")
 
 
+@dataclass
+class _EvalJob:
+    profile: Profile
+    listings: list[Listing]
+    future: asyncio.Future
+
+
 class NoopEvaluator:
     """Passthrough evaluator used when AI is disabled."""
 
@@ -29,13 +38,47 @@ class NoopEvaluator:
     ) -> dict[str, AIEvaluation]:
         return {l.id: AIEvaluation.passthrough() for l in listings}
 
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
 
 class AIEvaluator:
     def __init__(self, config: AIConfig):
         self._config = config
         self._url = f"{_ollama_base(config.litellm_base_url)}/api/chat"
+        self._queue: asyncio.Queue[_EvalJob | None] = asyncio.Queue()
+        self._worker_task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        """Start the background evaluation worker."""
+        self._worker_task = asyncio.create_task(self._worker())
+
+    async def stop(self) -> None:
+        """Signal the worker to drain and stop."""
+        await self._queue.put(None)
+        if self._worker_task:
+            await self._worker_task
+
+    async def _worker(self) -> None:
+        """Single worker that processes evaluation jobs sequentially."""
+        while True:
+            job = await self._queue.get()
+            if job is None:
+                break
+            try:
+                results = await self._process_batch(job.profile, job.listings)
+                job.future.set_result(results)
+            except Exception as e:
+                if not job.future.done():
+                    job.future.set_exception(e)
+            finally:
+                self._queue.task_done()
 
     async def evaluate(self, profile: Profile, listing: Listing) -> AIEvaluation:
+        """Single-listing evaluation — bypasses queue, used for escalation calls."""
         evaluation = await self._call_model(
             profile, listing,
             model=self._config.filter_model,
@@ -62,17 +105,23 @@ class AIEvaluator:
     async def evaluate_batch(
         self, profile: Profile, listings: list[Listing]
     ) -> dict[str, AIEvaluation]:
-        """Evaluate multiple listings in a single LLM call. Returns {listing_id: AIEvaluation}."""
+        """Queue listings for evaluation and await the result."""
         if not listings:
             return {}
-        results: dict[str, AIEvaluation] = {}
+        loop = asyncio.get_running_loop()
+        all_results: dict[str, AIEvaluation] = {}
+        futures: list[asyncio.Future] = []
         for i in range(0, len(listings), BATCH_SIZE):
             chunk = listings[i : i + BATCH_SIZE]
-            chunk_results = await self._call_batch(profile, chunk)
-            results.update(chunk_results)
-        return results
+            future = loop.create_future()
+            futures.append(future)
+            await self._queue.put(_EvalJob(profile=profile, listings=chunk, future=future))
+        for future in futures:
+            chunk_results = await future
+            all_results.update(chunk_results)
+        return all_results
 
-    async def _call_batch(
+    async def _process_batch(
         self, profile: Profile, listings: list[Listing]
     ) -> dict[str, AIEvaluation]:
         system_prompt, user_prompt = build_batch_prompt(profile, listings)

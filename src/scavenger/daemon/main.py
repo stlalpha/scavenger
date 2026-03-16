@@ -94,6 +94,7 @@ class Daemon:
         )
         await self._db.init()
         await self._db.migrate()  # apply schema migrations
+        await self._evaluator.start()
         await self._scheduler.start()
         stop_event = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -119,5 +120,6 @@ class Daemon:
 
     async def shutdown(self) -> None:
         await self._scheduler.stop()
+        await self._evaluator.stop()
         await self._socket_server.stop()
         await self._db.close()
