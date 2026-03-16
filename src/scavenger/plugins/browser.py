@@ -31,6 +31,12 @@ async def get_browser() -> Browser:
 
         _browser = await _playwright.chromium.connect_over_cdp(CDP_URL, timeout=5000)
         logger.info("Connected to Chrome via CDP at %s", CDP_URL)
+        # Warm up the network stack before real navigation
+        context = _browser.contexts[0] if _browser.contexts else await _browser.new_context()
+        warmup = await context.new_page()
+        await warmup.goto("about:blank")
+        await warmup.close()
+        logger.info("Chrome network stack ready")
     return _browser
 
 
