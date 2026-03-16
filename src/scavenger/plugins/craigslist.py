@@ -23,13 +23,15 @@ class CraigslistPlugin:
     def __init__(self, cities: list[str] | None = None, home_zip: str | None = None):
         self._explicit_cities = cities
         self._home_zip = home_zip
-        self._resolved_cities: list[str] | None = None  # cached after first lookup
+        self._resolved_cities: list[str] | None = None
+        self._city_lock = asyncio.Lock()
 
     async def _get_cities(self) -> list[str]:
         if self._explicit_cities:
             return self._explicit_cities
-        if self._resolved_cities is None:
-            self._resolved_cities = await cities_for_zip(self._home_zip) if self._home_zip else NATIONAL_METROS
+        async with self._city_lock:
+            if self._resolved_cities is None:
+                self._resolved_cities = await cities_for_zip(self._home_zip) if self._home_zip else NATIONAL_METROS
         return self._resolved_cities
 
     async def fetch(self, profile: Profile) -> list[Listing]:
