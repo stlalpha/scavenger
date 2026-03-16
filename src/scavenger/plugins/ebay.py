@@ -50,7 +50,9 @@ class EbayPlugin:
             if profile.price_max is not None:
                 params += f"&_udhi={profile.price_max:.0f}"
 
+            logger.debug("eBay: navigating to %s", SEARCH_URL + params)
             await page.goto(SEARCH_URL + params, wait_until="domcontentloaded", timeout=30000)
+            logger.debug("eBay: page loaded, title=%r", await page.title())
 
             # Wait for listings — eBay may show a verification page if blocked
             try:
