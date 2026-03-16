@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+from datetime import datetime, timezone
 from typing import Callable, Awaitable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -38,6 +39,7 @@ class PollScheduler:
         self._scheduler.add_job(
             self._run_poll, "interval", seconds=interval,
             args=[profile.id], id=profile.id, replace_existing=True,
+            next_run_time=datetime.now(timezone.utc),
         )
 
     def remove_profile(self, profile_id: str) -> None:
