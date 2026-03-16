@@ -21,19 +21,24 @@ class CraigslistPlugin:
     plugin_id = "craigslist"
 
     def __init__(self, cities: list[str] | None = None, home_zip: str | None = None):
-        if cities:
-            self._cities = cities
-        elif home_zip:
-            self._cities = cities_for_zip(home_zip)
-        else:
-            self._cities = NATIONAL_METROS
+        self._explicit_cities = cities
+        self._home_zip = home_zip
+        self._resolved_cities: list[str] | None = None  # cached after first lookup
+
+    async def _get_cities(self) -> list[str]:
+        if self._explicit_cities:
+            return self._explicit_cities
+        if self._resolved_cities is None:
+            self._resolved_cities = await cities_for_zip(self._home_zip) if self._home_zip else NATIONAL_METROS
+        return self._resolved_cities
 
     async def fetch(self, profile: Profile) -> list[Listing]:
         keywords = " ".join(
             kw if isinstance(kw, str) else " ".join(kw) for kw in profile.keywords
         )
+        cities = await self._get_cities()
         results = await asyncio.gather(
-            *[self._fetch_city(city, keywords, profile) for city in self._cities],
+            *[self._fetch_city(city, keywords, profile) for city in cities],
             return_exceptions=False,
         )
         return [listing for city_listings in results for listing in city_listings]

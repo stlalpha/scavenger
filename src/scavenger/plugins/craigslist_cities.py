@@ -1,255 +1,126 @@
-"""ZIP prefix → nearest Craigslist city mapping.
+"""Dynamic Craigslist city selection based on home ZIP code.
 
-For collecting use cases we want: local city first, then major metros
-for national coverage (rare items surface anywhere).
+Uses api.zippopotam.us (free, no key) to geocode the ZIP, then ranks
+known Craigslist US cities by distance. Returns nearest city first,
+then fills with major metros for national coverage.
 """
+import math
+import logging
+import httpx
 
-# ZIP 3-digit prefix → Craigslist subdomain
-ZIP_TO_CITY: dict[str, str] = {
-    # Northeast
-    "100": "newyork", "101": "newyork", "102": "newyork", "103": "newyork",
-    "104": "newyork", "110": "newyork", "111": "newyork", "112": "newyork",
-    "113": "newyork", "114": "newyork", "116": "newyork",
-    "060": "hartford", "061": "hartford", "062": "hartford", "063": "newlondon",
-    "064": "hartford", "065": "springfield",
-    "019": "boston", "020": "boston", "021": "boston", "022": "boston",
-    "023": "boston", "024": "boston", "025": "capecod", "026": "capecod",
-    "028": "providence", "029": "providence",
-    "030": "newhampshire", "031": "newhampshire", "032": "newhampshire",
-    "033": "newhampshire", "034": "newhampshire",
-    "039": "maine", "040": "maine", "041": "maine", "042": "maine",
-    "043": "maine", "044": "maine", "045": "maine", "046": "maine",
-    "047": "maine", "048": "maine", "049": "maine",
-    "050": "vermont", "051": "vermont", "052": "vermont", "053": "vermont",
-    "054": "vermont", "056": "vermont", "057": "vermont", "058": "vermont",
-    "070": "newjersey", "071": "newjersey", "072": "newjersey", "073": "newjersey",
-    "074": "newjersey", "075": "newjersey", "076": "newjersey", "077": "newjersey",
-    "078": "newjersey", "079": "newjersey", "080": "southjersey", "081": "southjersey",
-    "082": "southjersey", "083": "southjersey", "084": "southjersey", "085": "southjersey",
-    "086": "southjersey", "087": "southjersey", "088": "southjersey", "089": "southjersey",
-    "190": "philadelphia", "191": "philadelphia", "192": "philadelphia", "193": "philadelphia",
-    "194": "philadelphia", "195": "philadelphia", "196": "philadelphia",
-    "150": "pittsburgh", "151": "pittsburgh", "152": "pittsburgh",
-    "153": "pittsburgh", "154": "pittsburgh", "155": "pittsburgh",
-    # Mid-Atlantic
-    "200": "washingtondc", "201": "washingtondc", "202": "washingtondc",
-    "203": "washingtondc", "204": "washingtondc", "205": "washingtondc",
-    "206": "washingtondc", "207": "annapolis", "208": "annapolis",
-    "209": "annapolis", "210": "baltimore", "211": "baltimore",
-    "212": "baltimore", "214": "baltimore", "215": "baltimore",
-    "216": "easternshore", "217": "easternshore", "218": "easternshore",
-    "219": "easternshore",
-    "220": "washingtondc", "221": "washingtondc", "222": "washingtondc",
-    "223": "washingtondc", "224": "washingtondc", "225": "washingtondc",
-    "226": "washingtondc", "227": "washingtondc", "228": "washingtondc",
-    "229": "charlottesville",
-    "230": "norfolk", "231": "norfolk", "232": "norfolk", "233": "norfolk",
-    "234": "norfolk", "235": "norfolk", "236": "norfolk", "237": "norfolk",
-    "238": "norfolk", "239": "norfolk",
-    "240": "roanoke", "241": "roanoke", "242": "roanoke", "243": "roanoke",
-    "244": "roanoke", "245": "roanoke", "246": "roanoke",
-    # Southeast
-    "270": "greensboro", "271": "greensboro", "272": "greensboro",
-    "273": "greensboro", "274": "greensboro", "275": "raleigh",
-    "276": "raleigh", "277": "raleigh", "278": "raleigh", "279": "raleigh",
-    "280": "charlotte", "281": "charlotte", "282": "charlotte",
-    "283": "charlotte", "284": "charlotte", "285": "outerbanks",
-    "286": "asheville", "287": "asheville", "288": "asheville",
-    "289": "asheville",
-    "290": "columbia", "291": "columbia", "292": "columbia",
-    "293": "columbia", "294": "charleston", "295": "florence",
-    "296": "greenville", "297": "greenville", "298": "greenville",
-    "300": "atlanta", "301": "atlanta", "302": "atlanta", "303": "atlanta",
-    "304": "atlanta", "305": "atlanta", "306": "atlanta", "307": "atlanta",
-    "308": "savannah", "309": "savannah",
-    "310": "albanyga", "311": "atlanta", "312": "atlanta",
-    "313": "savannah", "314": "savannah", "315": "savannah",
-    "316": "valdosta", "317": "atlanta", "318": "albanyga",
-    "320": "jacksonville", "321": "orlando", "322": "jacksonville",
-    "323": "tallahassee", "324": "tallahassee", "325": "tallahassee",
-    "326": "gainesville", "327": "orlando", "328": "orlando",
-    "329": "orlando", "330": "miami", "331": "miami", "332": "miami",
-    "333": "miami", "334": "miami", "335": "sarasota", "336": "tampa",
-    "337": "tampa", "338": "lakeland", "339": "naples",
-    "340": "keys", "341": "naples", "342": "sarasota",
-    "344": "gainesville", "346": "westpalmbeach", "347": "orlando",
-    "349": "westpalmbeach",
-    "350": "birmingham", "351": "birmingham", "352": "birmingham",
-    "353": "birmingham", "354": "tuscaloosa", "355": "birmingham",
-    "356": "huntsville", "357": "huntsville", "358": "huntsville",
-    "359": "huntsville", "360": "montgomery", "361": "montgomery",
-    "362": "anniston", "363": "dothan", "364": "dothan",
-    "365": "mobile", "366": "mobile", "367": "mobile", "368": "mobile",
-    "369": "mobile",
-    "386": "daytona", "387": "daytona", "388": "daytona", "389": "daytona",
-    # Midwest
-    "430": "columbus", "431": "columbus", "432": "columbus",
-    "433": "columbus", "434": "toledo", "435": "toledo",
-    "436": "columbus", "437": "zanesville", "438": "zanesville",
-    "439": "columbus",
-    "440": "cleveland", "441": "cleveland", "442": "akron",
-    "443": "akron", "444": "akron", "445": "youngstown", "446": "youngstown",
-    "447": "youngstown", "448": "mansfield", "449": "mansfield",
-    "460": "indianapolis", "461": "indianapolis", "462": "indianapolis",
-    "463": "indianapolis", "464": "indianapolis", "465": "fortwayne",
-    "466": "fortwayne", "467": "fortwayne", "468": "fortwayne",
-    "469": "fortwayne", "470": "indianapolis",
-    "480": "detroit", "481": "detroit", "482": "detroit",
-    "483": "detroit", "484": "annarbor", "485": "annarbor",
-    "486": "flint", "487": "flint", "488": "lansing", "489": "lansing",
-    "490": "kalamazoo", "491": "grandrapids", "492": "grandrapids",
-    "493": "grandrapids", "494": "grandrapids", "495": "grandrapids",
-    "496": "traverse", "497": "traverse", "498": "up", "499": "up",
-    "500": "desmoines", "501": "desmoines", "502": "desmoines",
-    "503": "desmoines", "504": "desmoines", "505": "fortdodge",
-    "506": "waterloo", "507": "waterloo", "508": "waterloo",
-    "510": "quad cities", "511": "quad cities", "512": "quad cities",
-    "513": "quad cities", "514": "dubuque", "515": "cedarrapids",
-    "516": "cedarrapids", "520": "quad cities",
-    "530": "madison", "531": "madison", "532": "madison",
-    "534": "madison", "535": "lacrosse", "537": "madison",
-    "538": "madison", "539": "madison", "540": "greenbay",
-    "541": "greenbay", "542": "greenbay", "543": "greenbay",
-    "544": "greenbay", "545": "rhinelander", "546": "rhinelander",
-    "547": "lacrosse", "548": "lacrosse", "549": "madison",
-    "550": "minneapolis", "551": "minneapolis", "553": "minneapolis",
-    "554": "minneapolis", "555": "minneapolis", "556": "duluth",
-    "557": "duluth", "558": "duluth", "559": "duluth",
-    "560": "fargo", "561": "fargo", "562": "fargo",
-    "563": "fargo", "564": "fargo", "565": "fargo",
-    "570": "rapid city", "571": "rapid city", "572": "rapid city",
-    "573": "rapid city", "574": "rapid city", "575": "rapid city",
-    "576": "rapid city", "577": "rapid city",
-    "580": "fargo", "581": "fargo", "582": "fargo",
-    "583": "fargo", "584": "fargo", "585": "fargo",
-    "586": "fargo", "587": "fargo", "588": "fargo",
-    # Missouri / St. Louis area
-    "630": "stlouis", "631": "stlouis", "632": "stlouis",
-    "633": "stlouis", "634": "stlouis", "635": "stlouis",
-    "636": "stlouis", "637": "stlouis", "638": "stlouis",
-    "639": "stlouis",
-    "640": "kansascity", "641": "kansascity", "644": "stjoseph",
-    "645": "stjoseph", "646": "stjoseph", "647": "kansascity",
-    "648": "kansascity", "649": "kansascity",
-    "650": "columbia", "651": "columbia", "652": "columbia",
-    "653": "columbia", "654": "springfieldmo", "655": "springfieldmo",
-    "656": "springfieldmo", "657": "springfieldmo", "658": "springfieldmo",
-    # Illinois
-    "600": "chicago", "601": "chicago", "602": "chicago",
-    "603": "chicago", "604": "chicago", "605": "chicago",
-    "606": "chicago", "607": "chicago", "608": "chicago",
-    "609": "chicago",
-    "610": "chicago", "611": "chicago", "612": "chicago",
-    "613": "chicago", "614": "peoria", "615": "peoria",
-    "616": "peoria", "617": "bloomington", "618": "carbondale",
-    "619": "carbondale", "620": "carbondale", "621": "carbondale",
-    "622": "carbondale", "623": "carbondale", "624": "carbondale",
-    "625": "springfieldil", "626": "springfieldil", "627": "springfieldil",
-    "628": "springfieldil", "629": "springfieldil",
-    # Mountain/West
-    "800": "denver", "801": "denver", "802": "denver",
-    "803": "boulder", "804": "boulder", "805": "boulder",
-    "806": "pueblo", "807": "pueblo", "808": "pueblo",
-    "809": "pueblo", "810": "pueblo", "811": "pueblo",
-    "812": "pueblo", "813": "pueblo", "814": "pueblo",
-    "815": "pueblo", "816": "pueblo",
-    "820": "wyoming", "821": "wyoming", "822": "wyoming",
-    "823": "wyoming", "824": "wyoming", "825": "wyoming",
-    "826": "wyoming", "827": "wyoming", "828": "wyoming",
-    "829": "wyoming", "830": "wyoming", "831": "wyoming",
-    "832": "wyoming",
-    "833": "idaho", "834": "idaho", "835": "idaho",
-    "836": "idaho", "837": "idaho", "838": "idaho",
-    "840": "saltlakecity", "841": "saltlakecity", "842": "saltlakecity",
-    "843": "saltlakecity", "844": "saltlakecity", "845": "saltlakecity",
-    "846": "saltlakecity", "847": "saltlakecity",
-    "850": "phoenix", "851": "phoenix", "852": "phoenix",
-    "853": "phoenix", "854": "phoenix", "855": "prescott",
-    "856": "tucson", "857": "tucson", "858": "tucson",
-    "859": "flagstaff", "860": "flagstaff", "863": "flagstaff",
-    "864": "flagstaff", "865": "albuquerque",
-    "870": "albuquerque", "871": "albuquerque", "872": "albuquerque",
-    "873": "albuquerque", "874": "albuquerque", "875": "albuquerque",
-    "876": "albuquerque", "877": "albuquerque", "878": "albuquerque",
-    "879": "albuquerque", "880": "elpaso", "881": "elpaso",
-    "882": "elpaso", "883": "elpaso", "884": "elpaso",
-    # Pacific
-    "900": "losangeles", "901": "losangeles", "902": "losangeles",
-    "903": "losangeles", "904": "losangeles", "905": "losangeles",
-    "906": "losangeles", "907": "losangeles", "908": "losangeles",
-    "910": "losangeles", "911": "losangeles", "912": "losangeles",
-    "913": "losangeles", "914": "ventura", "915": "ventura",
-    "916": "ventura", "917": "ventura", "918": "ventura",
-    "919": "sandiego", "920": "sandiego", "921": "sandiego",
-    "922": "sandiego", "923": "inlandempire", "924": "inlandempire",
-    "925": "inlandempire", "926": "orangecounty", "927": "orangecounty",
-    "928": "orangecounty", "930": "santabarbara", "931": "santabarbara",
-    "932": "bakersfield", "933": "bakersfield", "934": "santabarbara",
-    "935": "bakersfield", "936": "fresno", "937": "fresno",
-    "938": "fresno", "939": "monterey", "940": "sfbay",
-    "941": "sfbay", "942": "sfbay", "943": "sfbay",
-    "944": "sfbay", "945": "sfbay", "946": "sfbay",
-    "947": "sfbay", "948": "sfbay", "949": "sfbay",
-    "950": "sfbay", "951": "sfbay", "952": "sfbay",
-    "953": "sfbay", "954": "sfbay", "955": "siskiyou",
-    "956": "sacramento", "957": "sacramento", "958": "sacramento",
-    "959": "sacramento", "960": "redding", "961": "redding",
-    "970": "portland", "971": "portland", "972": "portland",
-    "973": "portland", "974": "portland", "975": "medford",
-    "976": "medford", "977": "medford", "978": "bend",
-    "979": "bend",
-    "980": "seattle", "981": "seattle", "982": "seattle",
-    "983": "seattle", "984": "seattle", "985": "olympia",
-    "986": "olympia", "988": "yakima", "989": "yakima",
-    "990": "spokane", "991": "spokane", "992": "spokane",
-    "993": "wenatchee", "994": "wenatchee",
-    # Texas
-    "750": "dallas", "751": "dallas", "752": "dallas",
-    "753": "dallas", "754": "tyler", "755": "tyler",
-    "756": "tyler", "757": "tyler", "758": "tyler",
-    "759": "tyler",
-    "760": "fortworth", "761": "fortworth", "762": "fortworth",
-    "763": "abilene", "764": "abilene", "765": "waco",
-    "766": "waco", "767": "waco",
-    "768": "sanangelo", "769": "sanangelo",
-    "770": "houston", "771": "houston", "772": "houston",
-    "773": "houston", "774": "houston", "775": "houston",
-    "776": "houston", "777": "houston", "778": "houston",
-    "779": "beaumont", "780": "sanantonio", "781": "sanantonio",
-    "782": "sanantonio", "783": "sanantonio", "784": "sanantonio",
-    "785": "sanantonio", "786": "austin", "787": "austin",
-    "788": "austin", "789": "austin",
-    "790": "abilene", "791": "abilene", "792": "abilene",
-    "793": "lubbock", "794": "lubbock", "795": "lubbock",
-    "796": "lubbock", "797": "lubbock",
-    "798": "elpaso", "799": "elpaso",
-    # Alaska / Hawaii
-    "995": "anchorage", "996": "anchorage", "997": "anchorage",
-    "998": "fairbanks", "999": "fairbanks",
-    "967": "honolulu", "968": "honolulu",
+logger = logging.getLogger(__name__)
+
+# Craigslist subdomain → (lat, lon)
+CL_CITIES: dict[str, tuple[float, float]] = {
+    "newyork":       (40.7128,  -74.0060),
+    "losangeles":    (34.0522, -118.2437),
+    "chicago":       (41.8781,  -87.6298),
+    "houston":       (29.7604,  -95.3698),
+    "phoenix":       (33.4484, -112.0740),
+    "philadelphia":  (39.9526,  -75.1652),
+    "sanantonio":    (29.4241,  -98.4936),
+    "sandiego":      (32.7157, -117.1611),
+    "dallas":        (32.7767,  -96.7970),
+    "sfbay":         (37.7749, -122.4194),
+    "seattle":       (47.6062, -122.3321),
+    "denver":        (39.7392, -104.9903),
+    "boston":        (42.3601,  -71.0589),
+    "detroit":       (42.3314,  -83.0458),
+    "minneapolis":   (44.9778,  -93.2650),
+    "stlouis":       (38.6270,  -90.1994),
+    "baltimore":     (39.2904,  -76.6122),
+    "washingtondc":  (38.9072,  -77.0369),
+    "nashville":     (36.1627,  -86.7816),
+    "louisville":    (38.2527,  -85.7585),
+    "portland":      (45.5051, -122.6750),
+    "oklahomacity":  (35.4676,  -97.5164),
+    "lasvegas":      (36.1699, -115.1398),
+    "memphis":       (35.1495,  -90.0490),
+    "atlanta":       (33.7490,  -84.3880),
+    "miami":         (25.7617,  -80.1918),
+    "orlando":       (28.5383,  -81.3792),
+    "tampa":         (27.9506,  -82.4572),
+    "charlotte":     (35.2271,  -80.8431),
+    "raleigh":       (35.7796,  -78.6382),
+    "richmond":      (37.5407,  -77.4360),
+    "pittsburgh":    (40.4406,  -79.9959),
+    "cleveland":     (41.4993,  -81.6944),
+    "columbus":      (39.9612,  -82.9988),
+    "cincinnati":    (39.1031,  -84.5120),
+    "indianapolis":  (39.7684,  -86.1581),
+    "milwaukee":     (43.0389,  -87.9065),
+    "kansascity":    (39.0997,  -94.5786),
+    "omaha":         (41.2565,  -95.9345),
+    "saltlakecity":  (40.7608, -111.8910),
+    "albuquerque":   (35.0844, -106.6504),
+    "tucson":        (32.2226, -110.9747),
+    "fresno":        (36.7378, -119.7871),
+    "sacramento":    (38.5816, -121.4944),
+    "longisland":    (40.7891,  -73.1350),
+    "newjersey":     (40.0583,  -74.4057),
+    "connecticut":   (41.6032,  -73.0877),
+    "austin":        (30.2672,  -97.7431),
+    "fortworth":     (32.7555,  -97.3308),
+    "elpaso":        (31.7619, -106.4850),
+    "jacksonville":  (30.3322,  -81.6557),
+    "anchorage":     (61.2181, -149.9003),
+    "honolulu":      (21.3069, -157.8583),
 }
 
-# Major metros always included for national coverage of rare items
 NATIONAL_METROS = ["newyork", "losangeles", "chicago", "seattle", "dallas", "sfbay"]
 
 
-def cities_for_zip(home_zip: str, max_cities: int = 7) -> list[str]:
-    """Return Craigslist cities to search given a home ZIP code.
+def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distance in miles between two lat/lon points."""
+    r = 3958.8  # Earth radius in miles
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return r * 2 * math.asin(math.sqrt(a))
 
-    Always includes the local city first, then fills up to max_cities
-    with major metros for national coverage.
+
+async def _geocode_zip(zip_code: str) -> tuple[float, float] | None:
+    """Return (lat, lon) for a US ZIP code using api.zippopotam.us."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"https://api.zippopotam.us/us/{zip_code}")
+            resp.raise_for_status()
+            data = resp.json()
+            place = data["places"][0]
+            return float(place["latitude"]), float(place["longitude"])
+    except Exception as e:
+        logger.warning("ZIP geocode failed for %s: %s", zip_code, e)
+        return None
+
+
+async def cities_for_zip(home_zip: str, max_cities: int = 7) -> list[str]:
+    """Return Craigslist cities sorted by distance from home ZIP.
+
+    Nearest city is first. Fills remaining slots with major metros
+    for national coverage (rare items surface anywhere).
     """
-    prefix = home_zip[:3]
-    local = ZIP_TO_CITY.get(prefix)
+    coords = await _geocode_zip(home_zip)
+    if coords is None:
+        logger.warning("Falling back to national metros (could not geocode %s)", home_zip)
+        return NATIONAL_METROS[:max_cities]
 
-    cities = []
-    if local:
-        cities.append(local)
+    lat, lon = coords
+    ranked = sorted(
+        CL_CITIES.items(),
+        key=lambda kv: _haversine(lat, lon, kv[1][0], kv[1][1]),
+    )
 
+    # Always include local nearest city, then fill with majors for national reach
+    cities = [ranked[0][0]]  # nearest
     for metro in NATIONAL_METROS:
         if metro not in cities:
             cities.append(metro)
         if len(cities) >= max_cities:
             break
 
+    logger.info(
+        "Craigslist cities for ZIP %s (%s): %s",
+        home_zip, ranked[0][0], cities,
+    )
     return cities
