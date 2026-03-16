@@ -52,15 +52,20 @@ class Daemon:
                 continue
             try:
                 fetched = await plugin.fetch(profile)
-                # Score and filter
+                # Score, filter, and skip listings we already have
                 scored = []
                 for listing in fetched:
+                    existing = await self._db.get_listing(listing.id)
+                    if existing:
+                        # Update last_seen but skip AI evaluation
+                        await self._db.upsert_listing(listing)
+                        continue
                     listing.relevance_score = score_listing(
                         profile, listing.title, listing.description, listing.price
                     )
                     if listing.relevance_score > 0.0:
                         scored.append(listing)
-                # Batch AI evaluation
+                # Batch AI evaluation — only new listings
                 evaluations = await self._evaluator.evaluate_batch(profile, scored)
                 for listing in scored:
                     evaluation = evaluations.get(listing.id)
