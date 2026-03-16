@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from playwright.async_api import async_playwright, Browser, Playwright
+from playwright_stealth import Stealth
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,8 @@ LAUNCH_ARGS = [
     "--disable-gpu",
 ]
 
+_stealth = Stealth(init_scripts_only=False)
+
 
 async def get_browser() -> Browser:
     """Return a shared Chromium instance, launching it if needed."""
@@ -28,14 +31,14 @@ async def get_browser() -> Browser:
                 headless=True,
                 args=LAUNCH_ARGS,
             )
-            logger.info("Launched shared headless Chromium")
+            logger.info("Launched shared headless Chromium (stealth mode)")
     return _browser
 
 
 async def new_context():
-    """Return a new browser context with stealth user-agent."""
+    """Return a new stealth browser context."""
     browser = await get_browser()
-    return await browser.new_context(
+    context = await browser.new_context(
         user_agent=(
             "Mozilla/5.0 (X11; Linux x86_64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -47,3 +50,5 @@ async def new_context():
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         },
     )
+    await _stealth.apply_stealth_async(context)
+    return context
