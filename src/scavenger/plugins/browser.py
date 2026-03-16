@@ -3,11 +3,12 @@
 Requires Chrome running with remote debugging enabled:
     google-chrome-stable --remote-debugging-port=9222 --user-data-dir=/tmp/scavenger-chrome &
 
-No fallback — if Chrome isn't available on port 9222, scraping fails loudly.
+Uses the real Chrome session (cookies, fingerprint, history) — invisible to bot detection.
+Pages open as real tabs in Chrome. Close the page when done; never close the context.
 """
 import asyncio
 import logging
-from playwright.async_api import async_playwright, Browser, Playwright, BrowserContext, Page
+from playwright.async_api import async_playwright, Browser, Playwright, Page
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +17,6 @@ _playwright: Playwright | None = None
 _lock = asyncio.Lock()
 
 CDP_URL = "http://localhost:9222"
-
-CONTEXT_OPTIONS = dict(
-    user_agent=(
-        "Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    viewport={"width": 1280, "height": 900},
-    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-)
 
 
 async def get_browser() -> Browser:
@@ -43,9 +34,16 @@ async def get_browser() -> Browser:
     return _browser
 
 
-async def new_page() -> tuple[BrowserContext, Page]:
-    """Return (context, page). Caller MUST close both when done."""
+async def new_page() -> Page:
+    """Return a new page in the user's real Chrome session.
+
+    Opens as a visible tab. Caller MUST close the page when done:
+        finally:
+            await page.close()
+    Never close the context — it's the user's live Chrome session.
+    """
     browser = await get_browser()
-    context = await browser.new_context(**CONTEXT_OPTIONS)
-    page = await context.new_page()
-    return context, page
+    # Use the existing real Chrome context (has cookies, extensions, history)
+    # Fall back to creating a context only if somehow none exist yet
+    context = browser.contexts[0] if browser.contexts else await browser.new_context()
+    return await context.new_page()

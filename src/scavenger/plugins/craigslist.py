@@ -46,7 +46,7 @@ class CraigslistPlugin:
         return [listing for city_listings in results for listing in city_listings]
 
     async def _fetch_city(self, city: str, keywords: str, profile: Profile) -> list[Listing]:
-        context, page = await new_page()
+        page = await new_page()
         try:
             url = f"https://{city}.craigslist.org/search/sss?query={keywords.replace(' ', '+')}&sort=date"
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -128,7 +128,6 @@ class CraigslistPlugin:
             return []
         finally:
             await page.close()
-            await context.close()
 
     async def supports_geo(self) -> bool:
         return True

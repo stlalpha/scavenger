@@ -34,7 +34,7 @@ class EbayPlugin:
             return []
 
     async def _scrape(self, keywords: str, profile: Profile) -> list[Listing]:
-        context, page = await new_page()
+        page = await new_page()
         try:
             params = (
                 f"?_nkw={keywords.replace(' ', '+')}"
@@ -123,7 +123,6 @@ class EbayPlugin:
 
         finally:
             await page.close()
-            await context.close()
 
     async def supports_geo(self) -> bool:
         return False
