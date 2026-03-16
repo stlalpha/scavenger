@@ -70,7 +70,6 @@ class Daemon:
                 current_errors = state["consecutive_errors"] if state else 0
                 existing_last_polled = None
                 if state and state.get("last_polled"):
-                    from datetime import datetime
                     existing_last_polled = datetime.fromisoformat(state["last_polled"])
                 await self._db.update_source_state(
                     source_id,
