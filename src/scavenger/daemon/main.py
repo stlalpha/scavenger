@@ -11,6 +11,8 @@ from scavenger.models import Profile, Listing
 from scavenger.plugins.ebay import EbayPlugin
 from scavenger.plugins.craigslist import CraigslistPlugin
 from scavenger.scoring import score_listing
+from scavenger.ai.evaluator import AIEvaluator, NoopEvaluator
+from scavenger.ai.models import AIConfig
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +23,13 @@ BUNDLED_PLUGINS = {
 
 
 class Daemon:
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, ai_config: AIConfig | None = None):
         self._config = config
         self._db = Database(config.db_path)
         self._scheduler = PollScheduler()
         self._socket_server = SocketServer(config.socket_path)
         self._plugins = dict(BUNDLED_PLUGINS)
+        self._evaluator = AIEvaluator(ai_config) if (ai_config and ai_config.enabled) else NoopEvaluator()
 
     def _register_profiles(self) -> None:
         for profile in self._config.profiles:
@@ -53,6 +56,11 @@ class Daemon:
                     )
                     if listing.relevance_score == 0.0:
                         continue
+                    # AI evaluation
+                    evaluation = await self._evaluator.evaluate(profile, listing)
+                    if not evaluation.relevant:
+                        continue
+                    listing.ai_evaluation = evaluation.model_dump_json()
                     if await self._db.upsert_listing(listing):
                         new_listings.append(listing)
                 await self._db.update_source_state(source_id, last_polled=datetime.now(timezone.utc))
@@ -65,6 +73,7 @@ class Daemon:
 
     async def run(self) -> None:
         await self._db.init()
+        await self._db.migrate()  # apply schema migrations
         await self._scheduler.start()
         stop_event = asyncio.Event()
         loop = asyncio.get_running_loop()

@@ -2,6 +2,7 @@ import tomllib
 from pathlib import Path
 from pydantic import BaseModel, ValidationError
 from scavenger.models import Profile
+from scavenger.ai.models import AIConfig
 
 
 class GlobalConfig(BaseModel):
@@ -53,3 +54,21 @@ def load_config(path: Path) -> AppConfig:
         return AppConfig(global_config=global_config, profiles=profiles)
     except (ValidationError, TypeError) as e:
         raise ConfigError(f"Invalid config: {e}")
+
+
+def load_ai_config(path: Path) -> AIConfig:
+    """Load AI config from TOML. Returns disabled config if file missing."""
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return AIConfig()  # disabled by default
+    except OSError as e:
+        raise ConfigError(f"Cannot read AI config: {e}")
+    try:
+        data = tomllib.loads(raw)
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"Invalid AI config TOML: {e}")
+    try:
+        return AIConfig(**data.get("ai", {}))
+    except Exception as e:
+        raise ConfigError(f"Invalid AI config: {e}")
