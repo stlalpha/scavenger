@@ -79,6 +79,11 @@ class Daemon:
         return new_listings
 
     async def run(self) -> None:
+        logging.basicConfig(
+            level=self._config.log_level,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
         await self._db.init()
         await self._db.migrate()  # apply schema migrations
         await self._scheduler.start()
