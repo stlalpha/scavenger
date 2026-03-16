@@ -61,6 +61,7 @@ class ResultsFeed(Widget):
     def __init__(self) -> None:
         super().__init__()
         self._listings: list[Listing] = []
+        self._listing_fingerprint: str = ""
 
     def compose(self) -> ComposeResult:
         yield ListView()
@@ -76,6 +77,11 @@ class ResultsFeed(Widget):
         return None
 
     async def update_listings(self, listings: list[Listing]) -> None:
+        # Skip full re-render if nothing changed (id + status is enough to detect changes)
+        fingerprint = "|".join(f"{l.id}:{l.status}" for l in listings)
+        if fingerprint == self._listing_fingerprint:
+            return
+        self._listing_fingerprint = fingerprint
         self._listings = listings
         list_view = self.query_one(ListView)
         await list_view.clear()

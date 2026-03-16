@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from textual.app import App
 from textual.binding import Binding
@@ -38,6 +39,7 @@ class ScavengerApp(App):
 
     def on_mount(self) -> None:
         self.push_screen(MainScreen(profiles=self._config.profiles))
+        self.run_worker(self._poll(), exclusive=True)
         self._poll_timer = self.set_interval(POLL_INTERVAL, self._poll)
 
     async def _poll(self) -> None:
@@ -52,8 +54,8 @@ class ScavengerApp(App):
             stats = await self._data_layer.get_profile_stats()
             # Post to the current screen, not the app — messages don't bubble down
             self.screen.post_message(DataUpdated(listings=listings, profile_stats=stats))
-            # Check daemon socket and last source poll
-            daemon_up = self._check_daemon()
+            # Check daemon socket (in thread to avoid blocking event loop)
+            daemon_up = await asyncio.to_thread(self._check_daemon)
             last_source_poll = await self._data_layer.get_last_source_poll()
             try:
                 bar = self.query_one(StatusBar)

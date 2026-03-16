@@ -17,11 +17,7 @@ class DataLayer:
 
     async def get_profile_stats(self) -> dict[str, int]:
         """Return {profile_id: new_listing_count}."""
-        listings = await self._db.get_listings(status="new", limit=1000)
-        stats: dict[str, int] = {}
-        for listing in listings:
-            stats[listing.profile_id] = stats.get(listing.profile_id, 0) + 1
-        return stats
+        return await self._db.count_new_by_profile()
 
     async def mark_status(self, listing_id: str, status: str) -> None:
         listing = await self._db.get_listing(listing_id)

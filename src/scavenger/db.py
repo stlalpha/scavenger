@@ -206,6 +206,13 @@ class Database:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def count_new_by_profile(self) -> dict[str, int]:
+        """Return {profile_id: count} for listings with status='new'."""
+        cursor = await self._conn.execute(
+            "SELECT profile_id, COUNT(*) FROM listings WHERE status='new' GROUP BY profile_id"
+        )
+        return {row[0]: row[1] for row in await cursor.fetchall()}
+
     async def get_most_recent_poll(self) -> datetime | None:
         """Return the most recent last_polled timestamp across all sources."""
         cursor = await self._conn.execute(
