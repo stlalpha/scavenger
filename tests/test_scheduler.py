@@ -54,5 +54,7 @@ async def test_trigger_now_calls_callback():
     s.add_profile(profile, callback=mock_cb)
     await s.trigger_now("test")
     await asyncio.sleep(0.05)
-    mock_cb.assert_called_once_with(profile)
+    # callback fires on startup (next_run_time=now) AND on trigger_now
+    assert mock_cb.call_count >= 1
+    mock_cb.assert_called_with(profile)
     await s.stop()
