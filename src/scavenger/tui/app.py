@@ -1,6 +1,5 @@
-import asyncio
 import logging
-from textual.app import App, ComposeResult
+from textual.app import App
 from textual.binding import Binding
 from scavenger.config import AppConfig
 from scavenger.db import Database
@@ -38,7 +37,8 @@ class ScavengerApp(App):
         )
 
     def on_mount(self) -> None:
-        self.set_interval(POLL_INTERVAL, self._poll)
+        self.push_screen(MainScreen(profiles=self._config.profiles))
+        self._poll_timer = self.set_interval(POLL_INTERVAL, self._poll)
 
     async def _poll(self) -> None:
         if self._data_layer is None:
@@ -49,6 +49,13 @@ class ScavengerApp(App):
             )
             stats = await self._data_layer.get_profile_stats()
             self.post_message(DataUpdated(listings=listings, profile_stats=stats))
+            # Update status bar
+            from datetime import datetime, timezone
+            from scavenger.tui.widgets.status_bar import StatusBar
+            try:
+                self.query_one(StatusBar).set_last_poll(datetime.now(timezone.utc))
+            except Exception:
+                pass  # StatusBar may not be mounted yet
         except Exception as e:
             logger.warning("Poll error: %s", e)
 
@@ -59,11 +66,10 @@ class ScavengerApp(App):
         self._data_layer = DataLayer(self._db)
 
     async def on_unmount(self) -> None:
+        if hasattr(self, "_poll_timer"):
+            self._poll_timer.stop()
         if self._db:
             await self._db.close()
-
-    def compose(self) -> ComposeResult:
-        yield MainScreen(profiles=self._config.profiles)
 
     def set_active_profile(self, profile_id: str | None) -> None:
         self._active_profile_id = profile_id
@@ -93,8 +99,9 @@ class ScavengerApp(App):
         from scavenger.tui.widgets.results_feed import ResultsFeed
         import subprocess
         feed = self.query_one(ResultsFeed)
-        if feed._listings and 0 <= feed.cursor < len(feed._listings):
-            subprocess.Popen(["xdg-open", feed._listings[feed.cursor].url])
+        listing = feed.focused_listing
+        if listing:
+            subprocess.Popen(["xdg-open", listing.url])
 
     def action_dismiss_listing(self) -> None:
         self._mark_focused("dismissed")
@@ -103,20 +110,21 @@ class ScavengerApp(App):
         self._mark_focused("saved")
 
     def action_snooze_listing(self) -> None:
-        from datetime import datetime, timezone, timedelta
-        until = datetime.now(timezone.utc) + timedelta(hours=1)
-        self._mark_focused(f"snoozed_until:{until.isoformat()}")
+        self._mark_focused("snoozed")
 
     def _mark_focused(self, status: str) -> None:
         from scavenger.tui.widgets.results_feed import ResultsFeed
         feed = self.query_one(ResultsFeed)
-        if feed._listings and 0 <= feed.cursor < len(feed._listings) and self._data_layer:
-            listing_id = feed._listings[feed.cursor].id
-            asyncio.create_task(self._data_layer.mark_status(listing_id, status))
-            asyncio.create_task(self._poll())
+        listing = feed.focused_listing
+        if listing and self._data_layer:
+            listing_id = listing.id
+            async def _do() -> None:
+                await self._data_layer.mark_status(listing_id, status)  # type: ignore[union-attr]
+                await self._poll()
+            self.run_worker(_do(), exclusive=False)
 
     def action_repoll(self) -> None:
-        asyncio.create_task(self._poll())
+        self.run_worker(self._poll(), exclusive=True)
 
     def action_show_help(self) -> None:
         self.notify(

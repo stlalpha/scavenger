@@ -179,7 +179,7 @@ class Database:
         self, profile_id: str | None = None, limit: int = 100
     ) -> list[Listing]:
         """Get listings excluding dismissed status, sorted by first_seen DESC."""
-        conditions = ["status != 'dismissed'"]
+        conditions = ["status NOT IN ('dismissed', 'snoozed')"]
         params: list = []
         if profile_id:
             conditions.append("profile_id=?")

@@ -18,7 +18,7 @@ class Listing(BaseModel):
     first_seen: datetime
     last_seen: datetime
     relevance_score: float = 0.0
-    status: Literal["new", "seen", "saved", "dismissed"] = "new"
+    status: Literal["new", "seen", "saved", "dismissed", "snoozed"] = "new"
     ai_evaluation: str | None = None  # JSON-serialized AIEvaluation, set by daemon
 
 

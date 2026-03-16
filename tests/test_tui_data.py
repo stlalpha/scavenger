@@ -68,3 +68,13 @@ async def test_get_listings_excludes_dismissed(tmp_path):
     ids = [l.id for l in listings]
     assert "id0" not in ids
     await db.close()
+
+
+async def test_mark_snoozed_does_not_crash_get_listings(tmp_path):
+    db = await make_db_with_listings(tmp_path)
+    layer = DataLayer(db)
+    await layer.mark_status("id0", "snoozed")
+    # Must not raise ValidationError
+    listings = await layer.get_listings(profile_id=None, limit=10)
+    assert all(l.id != "id0" or l.status == "snoozed" for l in listings)
+    await db.close()

@@ -67,6 +67,12 @@ class ResultsFeed(Widget):
     def listing_count(self) -> int:
         return len(self._listings)
 
+    @property
+    def focused_listing(self) -> Listing | None:
+        if self._listings and 0 <= self.cursor < len(self._listings):
+            return self._listings[self.cursor]
+        return None
+
     def update_listings(self, listings: list[Listing]) -> None:
         self._listings = listings
         list_view = self.query_one(ListView)

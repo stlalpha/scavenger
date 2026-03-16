@@ -1,8 +1,11 @@
+import logging
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import ListItem, ListView, Label
 from scavenger.models import Profile
 from scavenger.tui.messages import ProfileSelected
+
+logger = logging.getLogger(__name__)
 
 
 class ProfileSidebar(Widget):
@@ -44,8 +47,8 @@ class ProfileSidebar(Widget):
             try:
                 item = list_view.query(ListItem)[i]
                 item.query_one(Label).update(self._label(profile))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not refresh label for profile %s: %s", profile.id, e)
 
     def get_unread(self, profile_id: str) -> int:
         return self._stats.get(profile_id, 0)
