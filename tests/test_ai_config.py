@@ -9,7 +9,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def test_load_ai_config_from_toml():
     config = load_ai_config(FIXTURES / "ai_config.toml")
     assert config.enabled is True
-    assert config.filter_model == "ollama/qwen2.5:7b"
+    assert config.filter_model == "qwen3.5:9b"
 
 
 def test_load_ai_config_missing_file_returns_disabled():

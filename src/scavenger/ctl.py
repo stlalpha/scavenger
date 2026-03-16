@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 
-from scavenger.config import load_config, ConfigError
+from scavenger.config import load_config, load_ai_config, ConfigError
 
 DEFAULT_CONFIG = Path("~/.config/scavenger/config.toml").expanduser()
 
@@ -113,6 +113,10 @@ def start(ctx):
     except ConfigError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+    ai_config = load_ai_config(ctx.obj["config_path"])
     from scavenger.daemon.main import Daemon
-    click.echo("Starting SCAVENGER daemon...")
-    asyncio.run(Daemon(config).run())
+    if ai_config.enabled:
+        click.echo(f"Starting SCAVENGER daemon (AI: {ai_config.filter_model})...")
+    else:
+        click.echo("Starting SCAVENGER daemon...")
+    asyncio.run(Daemon(config, ai_config=ai_config).run())

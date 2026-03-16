@@ -27,7 +27,7 @@ def test_ai_evaluation_roundtrip_json():
 def test_ai_config_defaults():
     config = AIConfig()
     assert config.enabled is False
-    assert config.filter_model == "ollama/qwen2.5:7b"
+    assert config.filter_model == "qwen3.5:9b"
     assert config.escalation_enabled is False
     assert config.escalation_min_keyword_score == 70.0
 

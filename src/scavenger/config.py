@@ -58,7 +58,10 @@ def load_config(path: Path) -> AppConfig:
 
 
 def load_ai_config(path: Path) -> AIConfig:
-    """Load AI config from TOML. Returns disabled config if file missing."""
+    """Load AI config from the main config TOML's [ai] section.
+
+    Returns disabled config if file missing or no [ai] section.
+    """
     try:
         raw = path.read_text()
     except FileNotFoundError:
@@ -69,7 +72,10 @@ def load_ai_config(path: Path) -> AIConfig:
         data = tomllib.loads(raw)
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"Invalid AI config TOML: {e}")
+    ai_data = data.get("ai", {})
+    if not ai_data:
+        return AIConfig()  # no [ai] section = disabled
     try:
-        return AIConfig(**data.get("ai", {}))
+        return AIConfig(**ai_data)
     except Exception as e:
         raise ConfigError(f"Invalid AI config: {e}")
