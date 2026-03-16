@@ -18,7 +18,7 @@ class AIConfig(BaseModel):
     enabled: bool = False
     litellm_base_url: str = "http://localhost:4000"
     filter_model: str = "ollama/qwen2.5:7b"
-    escalation_model: str = "anthropic/claude-haiku-4-5"
+    escalation_model: str = "anthropic/claude-3-5-haiku-20241022"
     escalation_enabled: bool = False
     escalation_min_keyword_score: float = 70.0
     api_key: str = "noop"

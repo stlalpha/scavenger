@@ -7,11 +7,14 @@ def build_prompt(profile: Profile, listing: Listing) -> tuple[str, str]:
         kw if isinstance(kw, str) else " or ".join(kw)
         for kw in profile.keywords
     )
-    price_range = (
-        f"${profile.price_min or 0:.0f} – ${profile.price_max:.0f}"
-        if profile.price_max
-        else "any price"
-    )
+    if profile.price_max and profile.price_min is not None:
+        price_range = f"${profile.price_min:.0f} – ${profile.price_max:.0f}"
+    elif profile.price_max:
+        price_range = f"up to ${profile.price_max:.0f}"
+    elif profile.price_min is not None:
+        price_range = f"${profile.price_min:.0f} and above"
+    else:
+        price_range = "any price"
 
     system = f"""You are an expert in {profile.name}. A collector is searching for items matching their profile.
 Evaluate the listing and respond ONLY with valid JSON matching this exact schema:

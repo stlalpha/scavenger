@@ -66,6 +66,18 @@ def test_price_range_in_system_prompt():
     assert "800" in system
 
 
+def test_price_range_no_min_says_up_to():
+    profile_no_min = Profile(
+        id="sony2", name="Sony A-mount Glass",
+        keywords=["sony"], negative_keywords=[],
+        sources=["ebay"], price_max=800.0,
+    )
+    system, _ = build_prompt(profile_no_min, make_listing())
+    assert "up to" in system
+    assert "800" in system
+    assert "$0" not in system
+
+
 def test_fixture_is_valid_ai_evaluation():
     from scavenger.ai.models import AIEvaluation
     data = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())

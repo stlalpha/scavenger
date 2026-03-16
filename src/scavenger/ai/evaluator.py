@@ -30,10 +30,17 @@ class AIEvaluator:
             and self._config.escalation_enabled
             and listing.relevance_score >= self._config.escalation_min_keyword_score
         ):
-            evaluation = await self._call_model(
+            escalation = await self._call_model(
                 profile, listing,
                 model=self._config.escalation_model,
                 timeout=self._config.escalation_timeout_sec,
+            )
+            # Only take the escalation decision, preserve everything else from filter
+            evaluation = AIEvaluation(
+                relevant=evaluation.relevant,
+                reason=evaluation.reason,
+                notable=evaluation.notable or escalation.notable,
+                escalate=escalation.escalate,
             )
         return evaluation
 

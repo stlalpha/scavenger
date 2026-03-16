@@ -110,6 +110,23 @@ async def test_escalation_second_call_fires_when_conditions_met():
 
 
 @respx.mock
+async def test_escalation_preserves_filter_reason():
+    fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
+    fixture["escalate"] = True
+    escalation_response = {"relevant": True, "reason": "Escalation reason", "notable": "Even more notable", "escalate": True}
+    respx.post(LITELLM_URL).mock(side_effect=[
+        litellm_response(fixture),
+        litellm_response(escalation_response),
+    ])
+    config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0)
+    ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
+    # Filter's reason is preserved
+    assert ev.reason == fixture["reason"]
+    # Escalation's escalate flag is used
+    assert ev.escalate is True
+
+
+@respx.mock
 async def test_escalation_second_call_skipped_when_disabled():
     fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
     fixture["escalate"] = True

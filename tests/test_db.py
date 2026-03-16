@@ -132,6 +132,35 @@ async def test_migrate_adds_ai_evaluation_column(db):
     assert "ai_evaluation" in columns
 
 
+async def test_migrate_alters_existing_database_without_column(tmp_path):
+    """Simulate upgrading a pre-M1.5 database that lacks the ai_evaluation column."""
+    db_path = tmp_path / "legacy.db"
+    # Create a database with the old schema (no ai_evaluation column)
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute("""CREATE TABLE listings (
+            id TEXT PRIMARY KEY, profile_id TEXT, source_id TEXT,
+            title TEXT, description TEXT, price REAL, currency TEXT,
+            condition TEXT, url TEXT, image_urls TEXT, location TEXT,
+            first_seen TEXT, last_seen TEXT, relevance_score REAL, status TEXT
+        )""")
+        await conn.execute("INSERT INTO listings VALUES ('x','p','e','t','d',1.0,'USD',NULL,'u','[]',NULL,'2026-01-01','2026-01-01',50.0,'new')")
+        await conn.commit()
+    # Now open via Database and migrate
+    database = Database(db_path)
+    database._conn = await aiosqlite.connect(db_path)
+    database._conn.row_factory = aiosqlite.Row
+    await database.migrate()
+    # Column must exist
+    cursor = await database._conn.execute("PRAGMA table_info(listings)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    assert "ai_evaluation" in columns
+    # Existing row must be preserved
+    cursor = await database._conn.execute("SELECT id FROM listings WHERE id='x'")
+    row = await cursor.fetchone()
+    assert row is not None
+    await database.close()
+
+
 async def test_migrate_is_idempotent(db):
     await db.migrate()
     await db.migrate()  # second call must not raise
