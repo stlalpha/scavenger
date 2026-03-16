@@ -1,17 +1,17 @@
-"""Browser connection for scraping plugins.
+"""Shared headless Chromium browser instance for all plugins.
 
 Connects to your running Chrome instance via CDP (preferred) so scraping
-uses your real browser profile, cookies, and fingerprint — invisible to
-bot detection.
+uses your real browser fingerprint — invisible to bot detection.
 
-To enable: launch Chrome once with:
+To enable CDP mode, launch Chrome once with:
     google-chrome-stable --remote-debugging-port=9222 &
 
-If Chrome isn't available on port 9222, falls back to launching system Chrome.
+Falls back to launching system Chrome if CDP not available.
+Each scrape gets its own fresh incognito context to prevent cross-contamination.
 """
 import asyncio
 import logging
-from playwright.async_api import async_playwright, Browser, Playwright, BrowserContext
+from playwright.async_api import async_playwright, Browser, Playwright, BrowserContext, Page
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,16 @@ LAUNCH_ARGS = [
     "--disable-dev-shm-usage",
 ]
 
+CONTEXT_OPTIONS = dict(
+    user_agent=(
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    viewport={"width": 1280, "height": 900},
+    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+)
+
 
 async def get_browser() -> Browser:
     """Return a browser — CDP-connected if available, system Chrome otherwise."""
@@ -39,41 +49,29 @@ async def get_browser() -> Browser:
         if _playwright is None:
             _playwright = await async_playwright().start()
 
-        # Try connecting to running Chrome first
         try:
             _browser = await _playwright.chromium.connect_over_cdp(CDP_URL, timeout=2000)
             logger.info("Connected to running Chrome via CDP at %s", CDP_URL)
-            return _browser
         except Exception:
             logger.info("Chrome not on %s — launching system Chrome", CDP_URL)
-
-        # Fall back to system Chrome binary
-        _browser = await _playwright.chromium.launch(
-            headless=False,
-            executable_path=SYSTEM_CHROME,
-            args=LAUNCH_ARGS,
-        )
-        logger.info("Launched system Chrome: %s", SYSTEM_CHROME)
+            _browser = await _playwright.chromium.launch(
+                headless=False,
+                executable_path=SYSTEM_CHROME,
+                args=LAUNCH_ARGS,
+            )
+            logger.info("Launched system Chrome")
     return _browser
 
 
-async def new_context() -> BrowserContext:
-    """Return a browser context.
+async def new_page() -> tuple[BrowserContext, Page]:
+    """Return (context, page) with a fresh incognito context.
 
-    When connected via CDP, reuses the existing default context (preserving
-    cookies/session). When launching fresh, creates a new context.
+    Caller MUST close both when done:
+        finally:
+            await page.close()
+            await context.close()
     """
     browser = await get_browser()
-
-    # CDP-connected browsers expose the existing context directly
-    if browser.contexts:
-        return browser.contexts[0]
-
-    return await browser.new_context(
-        user_agent=(
-            "Mozilla/5.0 (X11; Linux x86_64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        viewport={"width": 1280, "height": 900},
-    )
+    context = await browser.new_context(**CONTEXT_OPTIONS)
+    page = await context.new_page()
+    return context, page

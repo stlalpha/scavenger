@@ -4,12 +4,15 @@ from datetime import datetime, timezone
 
 from scavenger.dedup import content_hash
 from scavenger.models import Listing, Profile
-from scavenger.plugins.browser import new_context
+from scavenger.plugins.browser import new_page
 
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://www.ebay.com/sch/i.html"
 PRICE_RE = re.compile(r"[\$£€]([0-9,]+(?:\.[0-9]{2})?)")
+
+# Try these selectors in order — eBay occasionally restructures their DOM
+ITEM_SELECTORS = [".s-item", "li.s-item", ".srp-results .s-item", "[data-viewport]"]
 
 
 def _extract_price(text: str) -> float | None:
@@ -31,9 +34,7 @@ class EbayPlugin:
             return []
 
     async def _scrape(self, keywords: str, profile: Profile) -> list[Listing]:
-        context = await new_context()
-        page = await context.new_page()
-
+        context, page = await new_page()
         try:
             params = (
                 f"?_nkw={keywords.replace(' ', '+')}"
@@ -45,19 +46,32 @@ class EbayPlugin:
             if profile.price_max is not None:
                 params += f"&_udhi={profile.price_max:.0f}"
 
-            logger.debug("eBay: navigating to %s", SEARCH_URL + params)
             await page.goto(SEARCH_URL + params, wait_until="domcontentloaded", timeout=30000)
-            logger.debug("eBay: page loaded, title=%r", await page.title())
+            title = await page.title()
+            logger.debug("eBay: page loaded, title=%r", title)
 
-            # Wait for listings — eBay may show a verification page if blocked
-            try:
-                await page.wait_for_selector(".s-item", timeout=15000)
-            except Exception:
-                title = await page.title()
-                logger.warning("eBay: no listings found (page title: %r) — possible bot block", title)
+            if "Pardon Our Interruption" in title:
+                logger.warning("eBay: bot detection page — try running Chrome with --remote-debugging-port=9222")
                 return []
 
-            items = await page.query_selector_all(".s-item")
+            # Try each selector until one matches
+            item_selector = None
+            for sel in ITEM_SELECTORS:
+                try:
+                    await page.wait_for_selector(sel, timeout=5000)
+                    item_selector = sel
+                    break
+                except Exception:
+                    continue
+
+            if not item_selector:
+                logger.warning("eBay: no listing elements found on page (title: %r)", title)
+                # Log first 500 chars of page to help debug
+                content = await page.content()
+                logger.debug("eBay: page snippet: %s", content[:500])
+                return []
+
+            items = await page.query_selector_all(item_selector)
             listings = []
             now = datetime.now(timezone.utc)
 
@@ -71,10 +85,10 @@ class EbayPlugin:
                     if not title_el or not link_el:
                         continue
 
-                    title = (await title_el.inner_text()).strip()
+                    item_title = (await title_el.inner_text()).strip()
                     url = (await link_el.get_attribute("href") or "").split("?")[0]
 
-                    if "Shop on eBay" in title or not url:
+                    if "Shop on eBay" in item_title or not url:
                         continue
 
                     price_text = await price_el.inner_text() if price_el else ""
@@ -90,7 +104,7 @@ class EbayPlugin:
                         id=content_hash(url),
                         profile_id=profile.id,
                         source_id=self.plugin_id,
-                        title=title,
+                        title=item_title,
                         description="",
                         price=price,
                         url=url,
@@ -108,6 +122,7 @@ class EbayPlugin:
             return listings
 
         finally:
+            await page.close()
             await context.close()
 
     async def supports_geo(self) -> bool:

@@ -2,11 +2,10 @@ import re
 import asyncio
 import logging
 from datetime import datetime, timezone
-from xml.etree import ElementTree as ET
 
 from scavenger.dedup import content_hash
 from scavenger.models import Listing, Profile
-from scavenger.plugins.browser import new_context
+from scavenger.plugins.browser import new_page
 
 logger = logging.getLogger(__name__)
 
@@ -36,31 +35,42 @@ class CraigslistPlugin:
         return [listing for city_listings in results for listing in city_listings]
 
     async def _fetch_city(self, city: str, keywords: str, profile: Profile) -> list[Listing]:
-        url = f"https://{city}.craigslist.org/search/sss"
-        context = await new_context()
-        page = await context.new_page()
+        context, page = await new_page()
         try:
-            await page.goto(
-                f"{url}?query={keywords.replace(' ', '+')}&sort=date",
-                wait_until="domcontentloaded",
-                timeout=30000,
-            )
-            try:
-                await page.wait_for_selector(".cl-search-result", timeout=10000)
-            except Exception:
+            url = f"https://{city}.craigslist.org/search/sss?query={keywords.replace(' ', '+')}&sort=date"
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+            # Craigslist has two result formats depending on the city/view
+            item_selector = None
+            for sel in [".cl-search-result", ".result-row", "li.result-row"]:
+                try:
+                    await page.wait_for_selector(sel, timeout=8000)
+                    item_selector = sel
+                    break
+                except Exception:
+                    continue
+
+            if not item_selector:
                 logger.warning("Craigslist %s: no results found", city)
                 return []
 
-            items = await page.query_selector_all(".cl-search-result")
+            items = await page.query_selector_all(item_selector)
             listings = []
             now = datetime.now(timezone.utc)
 
             for item in items:
                 try:
-                    title_el = await item.query_selector(".posting-title .label")
-                    link_el = await item.query_selector("a.posting-title")
-                    price_el = await item.query_selector(".priceinfo")
-                    img_el = await item.query_selector("img")
+                    # Try both old and new Craigslist DOM structures
+                    title_el = (
+                        await item.query_selector(".posting-title .label") or
+                        await item.query_selector(".result-title") or
+                        await item.query_selector("a.titlestring")
+                    )
+                    link_el = (
+                        await item.query_selector("a.posting-title") or
+                        await item.query_selector("a.result-title") or
+                        await item.query_selector("a.titlestring")
+                    )
 
                     if not title_el or not link_el:
                         continue
@@ -70,9 +80,14 @@ class CraigslistPlugin:
                     if not item_url.startswith("http"):
                         item_url = f"https://{city}.craigslist.org{item_url}"
 
+                    price_el = (
+                        await item.query_selector(".priceinfo") or
+                        await item.query_selector(".result-price")
+                    )
                     price_text = await price_el.inner_text() if price_el else ""
                     price = _extract_price(price_text)
 
+                    img_el = await item.query_selector("img")
                     image_url = await img_el.get_attribute("src") if img_el else None
                     image_urls = [image_url] if image_url and not image_url.startswith("data:") else []
 
@@ -101,6 +116,7 @@ class CraigslistPlugin:
             logger.warning("Craigslist fetch failed for %s: %s", city, e)
             return []
         finally:
+            await page.close()
             await context.close()
 
     async def supports_geo(self) -> bool:
