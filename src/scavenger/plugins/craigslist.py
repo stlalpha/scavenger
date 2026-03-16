@@ -12,6 +12,11 @@ from scavenger.models import Listing, Profile
 
 logger = logging.getLogger(__name__)
 DEFAULT_CITIES = ["sfbay", "newyork", "losangeles", "chicago", "seattle"]
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
 PRICE_RE = re.compile(r"\$([0-9,]+(?:\.[0-9]{2})?)")
 
 
@@ -39,7 +44,7 @@ class CraigslistPlugin:
     async def _fetch_city(self, city: str, keywords: str, profile: Profile) -> list[Listing]:
         url = f"https://{city}.craigslist.org/search/sss"
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, headers=HEADERS) as client:
                 resp = await client.get(url, params={"query": keywords, "format": "rss"})
                 resp.raise_for_status()
         except (httpx.HTTPError, httpx.TimeoutException) as e:
