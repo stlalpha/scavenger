@@ -167,6 +167,31 @@ class Database:
         )
         return [_row_to_listing(r) for r in await cursor.fetchall()]
 
+    async def update_listing_status(self, listing_id: str, status: str) -> None:
+        """Update the status field of a listing by ID."""
+        await self._conn.execute(
+            "UPDATE listings SET status=? WHERE id=?",
+            (status, listing_id),
+        )
+        await self._conn.commit()
+
+    async def get_active_listings(
+        self, profile_id: str | None = None, limit: int = 100
+    ) -> list[Listing]:
+        """Get listings excluding dismissed status, sorted by first_seen DESC."""
+        conditions = ["status != 'dismissed'"]
+        params: list = []
+        if profile_id:
+            conditions.append("profile_id=?")
+            params.append(profile_id)
+        where = " WHERE " + " AND ".join(conditions)
+        params.append(limit)
+        cursor = await self._conn.execute(
+            f"SELECT * FROM listings{where} ORDER BY first_seen DESC LIMIT ?",
+            params,
+        )
+        return [_row_to_listing(r) for r in await cursor.fetchall()]
+
     async def get_price_history(self, listing_id: str) -> list[dict]:
         cursor = await self._conn.execute(
             "SELECT price, observed_at FROM price_history WHERE listing_id=? ORDER BY observed_at",

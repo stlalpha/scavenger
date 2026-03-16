@@ -166,6 +166,23 @@ async def test_migrate_is_idempotent(db):
     await db.migrate()  # second call must not raise
 
 
+async def test_update_listing_status(db):
+    await db.upsert_listing(make_listing())
+    await db.update_listing_status("abc123", "saved")
+    fetched = await db.get_listing("abc123")
+    assert fetched.status == "saved"
+
+
+async def test_get_active_listings_excludes_dismissed(db):
+    await db.upsert_listing(make_listing(id="a1", url="https://ebay.com/1"))
+    await db.upsert_listing(make_listing(id="a2", url="https://ebay.com/2"))
+    await db.update_listing_status("a1", "dismissed")
+    active = await db.get_active_listings(limit=10)
+    ids = [l.id for l in active]
+    assert "a1" not in ids
+    assert "a2" in ids
+
+
 async def test_ai_evaluation_persists_through_upsert(db):
     from datetime import datetime, timezone
     await db.migrate()
