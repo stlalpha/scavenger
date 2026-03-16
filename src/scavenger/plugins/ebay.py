@@ -14,10 +14,26 @@ PRICE_RE = re.compile(r"[\$£€]([0-9,]+(?:\.[0-9]{2})?)")
 # Try these selectors in order — eBay occasionally restructures their DOM
 ITEM_SELECTORS = [".s-item", "li.s-item", ".srp-results .s-item", "[data-viewport]"]
 
+# eBay has two DOM generations: legacy (.s-item__*) and modern (.s-card__*)
+TITLE_SELECTORS = [".s-card__title", ".s-item__title"]
+LINK_SELECTORS = [".s-card__link", ".s-item__link"]
+PRICE_SELECTORS = [".s-card__price", ".s-item__price"]
+IMAGE_SELECTORS = [".s-card__image", ".s-item__image-img"]
+LOCATION_SELECTORS = [".s-card__location", ".s-item__location"]
+
 
 def _extract_price(text: str) -> float | None:
     m = PRICE_RE.search(text.replace(",", ""))
     return float(m.group(1)) if m else None
+
+
+async def _query_first(parent, selectors: list[str]):
+    """Try multiple CSS selectors, return the first matching element or None."""
+    for sel in selectors:
+        el = await parent.query_selector(sel)
+        if el:
+            return el
+    return None
 
 
 class EbayPlugin:
@@ -75,29 +91,20 @@ class EbayPlugin:
             listings = []
             now = datetime.now(timezone.utc)
 
-            # Debug: log first few item titles to see what's being matched/skipped
-            if not listings:
-                sample_titles = []
-                for item in items[:5]:
-                    t = await item.query_selector(".s-item__title")
-                    if t:
-                        sample_titles.append((await t.inner_text()).strip()[:60])
-                if sample_titles:
-                    logger.debug("eBay: first item titles: %s", sample_titles)
-                else:
-                    logger.debug("eBay: %d items found but none have .s-item__title", len(items))
-
             for item in items:
                 try:
-                    title_el = await item.query_selector(".s-item__title")
-                    link_el = await item.query_selector(".s-item__link")
-                    price_el = await item.query_selector(".s-item__price")
-                    img_el = await item.query_selector(".s-item__image-img")
+                    title_el = await _query_first(item, TITLE_SELECTORS)
+                    link_el = await _query_first(item, LINK_SELECTORS)
+                    price_el = await _query_first(item, PRICE_SELECTORS)
+                    img_el = await _query_first(item, IMAGE_SELECTORS)
 
                     if not title_el or not link_el:
                         continue
 
                     item_title = (await title_el.inner_text()).strip()
+                    # Strip eBay decoration text from titles
+                    for noise in ("NEW LISTING", "Opens in a new window or tab"):
+                        item_title = item_title.replace(noise, "").strip()
                     url = (await link_el.get_attribute("href") or "").split("?")[0]
 
                     if "Shop on eBay" in item_title or not url:
@@ -109,7 +116,7 @@ class EbayPlugin:
                     image_url = await img_el.get_attribute("src") if img_el else None
                     image_urls = [image_url] if image_url and not image_url.startswith("data:") else []
 
-                    location_el = await item.query_selector(".s-item__location")
+                    location_el = await _query_first(item, LOCATION_SELECTORS)
                     location = (await location_el.inner_text()).strip() if location_el else None
 
                     listings.append(Listing(
