@@ -1,5 +1,6 @@
 import logging
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import tempfile
 import httpx
 from scavenger.dedup import content_hash
 
@@ -7,6 +8,11 @@ logger = logging.getLogger(__name__)
 
 PLACEHOLDER = "□"
 DEFAULT_CACHE_DIR = Path("~/.cache/scavenger/images").expanduser()
+
+
+def _ext_from_url(url: str) -> str:
+    suffix = PurePosixPath(url.split("?")[0]).suffix
+    return suffix if suffix else ".jpg"
 
 
 class ThumbnailCache:
@@ -17,7 +23,7 @@ class ThumbnailCache:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _cache_path(self, url: str) -> Path:
-        return self._cache_dir / f"{content_hash(url)}.jpg"
+        return self._cache_dir / f"{content_hash(url)}{_ext_from_url(url)}"
 
     async def get(self, url: str | None) -> Path | str:
         if not url:
@@ -32,8 +38,11 @@ class ThumbnailCache:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url)
                 response.raise_for_status()
-                dest.write_bytes(response.content)
-                return dest
-        except Exception as e:
+            # Write to temp file then rename atomically (POSIX atomic)
+            tmp = dest.with_suffix(".tmp")
+            tmp.write_bytes(response.content)
+            tmp.rename(dest)
+            return dest
+        except (httpx.HTTPError, httpx.TimeoutException, OSError) as e:
             logger.debug("Thumbnail download failed for %s: %s", url, e)
             return PLACEHOLDER

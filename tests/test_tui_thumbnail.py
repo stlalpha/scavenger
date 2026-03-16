@@ -48,3 +48,16 @@ async def test_timeout_returns_placeholder(tmp_path):
     cache = ThumbnailCache(cache_dir=tmp_path)
     result = await cache.get("https://example.com/slow.jpg")
     assert result == PLACEHOLDER
+
+
+@respx.mock
+async def test_cache_hit_after_download(tmp_path):
+    url = "https://example.com/seq.jpg"
+    respx.get(url).mock(return_value=httpx.Response(200, content=b"DATA"))
+    cache = ThumbnailCache(cache_dir=tmp_path)
+    first = await cache.get(url)
+    assert isinstance(first, Path)
+    # Second call must return cached path without making another HTTP call
+    second = await cache.get(url)
+    assert second == first
+    assert respx.calls.call_count == 1  # only one download
