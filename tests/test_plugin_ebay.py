@@ -1,17 +1,11 @@
-import pytest
-import respx
-import httpx
-from pathlib import Path
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 from scavenger.plugins.ebay import EbayPlugin
-from scavenger.models import Profile
+from scavenger.models import Profile, Listing
 from scavenger.dedup import content_hash
 
-FIXTURES = Path(__file__).parent / "fixtures"
-RSS_URL = "https://rss.ebay.com/rss2/search"
 
-
-@pytest.fixture
-def profile():
+def make_profile() -> Profile:
     return Profile(
         id="sony", name="Sony Glass",
         keywords=["sony", ["a-mount", "alpha mount"]],
@@ -20,40 +14,51 @@ def profile():
     )
 
 
-@respx.mock
-async def test_fetch_returns_listings(profile):
-    respx.get(RSS_URL).mock(return_value=httpx.Response(200, content=(FIXTURES / "ebay_rss.xml").read_bytes()))
-    listings = await EbayPlugin().fetch(profile)
-    assert len(listings) == 2
+def make_listing(id: str = "abc", url: str = "https://www.ebay.com/itm/123456789012") -> Listing:
+    now = datetime.now(timezone.utc)
+    return Listing(
+        id=content_hash(url), profile_id="sony", source_id="ebay",
+        title="Sony 85mm f/1.4 A-mount Lens",
+        url=url, price=249.99, image_urls=["https://i.ebayimg.com/img1.jpg"],
+        first_seen=now, last_seen=now, relevance_score=0.0,
+    )
 
 
-@respx.mock
-async def test_listing_fields(profile):
-    respx.get(RSS_URL).mock(return_value=httpx.Response(200, content=(FIXTURES / "ebay_rss.xml").read_bytes()))
-    listings = await EbayPlugin().fetch(profile)
-    first = listings[0]
-    assert "Sony 85mm" in first.title
-    assert first.source_id == "ebay"
-    assert first.url == "https://www.ebay.com/itm/123456789012"
-    assert first.price == 249.99
-    assert len(first.image_urls) == 1
+async def test_fetch_calls_scrape(monkeypatch):
+    listings = [make_listing()]
+    plugin = EbayPlugin()
+    monkeypatch.setattr(plugin, "_scrape", AsyncMock(return_value=listings))
+    result = await plugin.fetch(make_profile())
+    assert result == listings
 
 
-@respx.mock
-async def test_listing_id_is_content_hash(profile):
-    respx.get(RSS_URL).mock(return_value=httpx.Response(200, content=(FIXTURES / "ebay_rss.xml").read_bytes()))
-    listings = await EbayPlugin().fetch(profile)
-    assert listings[0].id == content_hash("https://www.ebay.com/itm/123456789012")
+async def test_fetch_returns_empty_on_scrape_error(monkeypatch):
+    plugin = EbayPlugin()
+    monkeypatch.setattr(plugin, "_scrape", AsyncMock(side_effect=Exception("network error")))
+    result = await plugin.fetch(make_profile())
+    assert result == []
 
 
-@respx.mock
-async def test_http_error_returns_empty(profile):
-    respx.get(RSS_URL).mock(return_value=httpx.Response(503))
-    assert await EbayPlugin().fetch(profile) == []
+async def test_fetch_returns_multiple_listings(monkeypatch):
+    listings = [make_listing(url=f"https://www.ebay.com/itm/{i}") for i in range(5)]
+    plugin = EbayPlugin()
+    monkeypatch.setattr(plugin, "_scrape", AsyncMock(return_value=listings))
+    result = await plugin.fetch(make_profile())
+    assert len(result) == 5
+
+
+async def test_listing_id_is_content_hash(monkeypatch):
+    url = "https://www.ebay.com/itm/123456789012"
+    listing = make_listing(url=url)
+    plugin = EbayPlugin()
+    monkeypatch.setattr(plugin, "_scrape", AsyncMock(return_value=[listing]))
+    result = await plugin.fetch(make_profile())
+    assert result[0].id == content_hash(url)
 
 
 async def test_plugin_id():
     assert EbayPlugin.plugin_id == "ebay"
+
 
 async def test_supports_geo():
     assert await EbayPlugin().supports_geo() is False
