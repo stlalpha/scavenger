@@ -10,6 +10,14 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 10
 
 
+def _ollama_base(config_url: str) -> str:
+    """Derive Ollama native API base from the configured URL.
+
+    Strips /v1 suffix if present (OpenAI compat path) to get the root.
+    """
+    return config_url.removesuffix("/v1").removesuffix("/")
+
+
 class NoopEvaluator:
     """Passthrough evaluator used when AI is disabled."""
 
@@ -25,7 +33,7 @@ class NoopEvaluator:
 class AIEvaluator:
     def __init__(self, config: AIConfig):
         self._config = config
-        self._url = f"{config.litellm_base_url}/chat/completions"
+        self._url = f"{_ollama_base(config.litellm_base_url)}/api/chat"
 
     async def evaluate(self, profile: Profile, listing: Listing) -> AIEvaluation:
         evaluation = await self._call_model(
@@ -78,13 +86,14 @@ class AIEvaluator:
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        "temperature": 0.1,
-                        "response_format": {"type": "json_object"},
+                        "stream": False,
+                        "think": False,
+                        "format": "json",
+                        "options": {"temperature": 0.1},
                     },
-                    headers={"Authorization": f"Bearer {self._config.api_key}"},
                 )
                 response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                content = response.json()["message"]["content"]
                 parsed = _json.loads(content)
                 # Handle both {"results": [...]} and bare [...]
                 if isinstance(parsed, dict):
@@ -126,13 +135,14 @@ class AIEvaluator:
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        "temperature": 0.1,
-                        "response_format": {"type": "json_object"},
+                        "stream": False,
+                        "think": False,
+                        "format": "json",
+                        "options": {"temperature": 0.1},
                     },
-                    headers={"Authorization": f"Bearer {self._config.api_key}"},
                 )
                 response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                content = response.json()["message"]["content"]
                 return AIEvaluation.model_validate_json(content)
         except (httpx.HTTPError, httpx.TimeoutException) as e:
             logger.warning("AI evaluation HTTP error: %s", e)

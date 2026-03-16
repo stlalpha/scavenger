@@ -9,7 +9,7 @@ from scavenger.models import Profile, Listing
 from datetime import datetime, timezone
 
 FIXTURES = Path(__file__).parent / "fixtures"
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
+OLLAMA_URL = "http://localhost:11434/api/chat"
 
 
 def make_profile() -> Profile:
@@ -32,9 +32,9 @@ def make_listing(**overrides) -> Listing:
     })
 
 
-def litellm_response(evaluation: dict) -> httpx.Response:
+def ollama_response(evaluation: dict) -> httpx.Response:
     return httpx.Response(200, json={
-        "choices": [{"message": {"content": json.dumps(evaluation)}}]
+        "message": {"role": "assistant", "content": json.dumps(evaluation)}
     })
 
 
@@ -51,7 +51,7 @@ async def test_noop_evaluator_returns_passthrough():
 @respx.mock
 async def test_evaluator_parses_valid_response():
     fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
-    respx.post(OLLAMA_URL).mock(return_value=litellm_response(fixture))
+    respx.post(OLLAMA_URL).mock(return_value=ollama_response(fixture))
     config = AIConfig(enabled=True)
     ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
     assert ev.relevant is True
@@ -62,7 +62,7 @@ async def test_evaluator_parses_valid_response():
 @respx.mock
 async def test_evaluator_returns_passthrough_on_malformed_json():
     respx.post(OLLAMA_URL).mock(return_value=httpx.Response(200, json={
-        "choices": [{"message": {"content": "not json at all"}}]
+        "message": {"role": "assistant", "content": "not json at all"}
     }))
     config = AIConfig(enabled=True)
     ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
@@ -87,7 +87,7 @@ async def test_evaluator_returns_passthrough_on_timeout():
 
 @respx.mock
 async def test_evaluator_not_relevant_discards():
-    respx.post(OLLAMA_URL).mock(return_value=litellm_response({
+    respx.post(OLLAMA_URL).mock(return_value=ollama_response({
         "relevant": False, "reason": "Wrong mount", "notable": None, "escalate": False
     }))
     config = AIConfig(enabled=True)
@@ -101,8 +101,8 @@ async def test_escalation_second_call_fires_when_conditions_met():
     fixture["escalate"] = True
     escalation_response = {**fixture, "escalate": True}
     respx.post(OLLAMA_URL).mock(side_effect=[
-        litellm_response(fixture),
-        litellm_response(escalation_response),
+        ollama_response(fixture),
+        ollama_response(escalation_response),
     ])
     config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0)
     ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
@@ -115,8 +115,8 @@ async def test_escalation_preserves_filter_reason():
     fixture["escalate"] = True
     escalation_response = {"relevant": True, "reason": "Escalation reason", "notable": "Even more notable", "escalate": True}
     respx.post(OLLAMA_URL).mock(side_effect=[
-        litellm_response(fixture),
-        litellm_response(escalation_response),
+        ollama_response(fixture),
+        ollama_response(escalation_response),
     ])
     config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0)
     ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
@@ -130,7 +130,7 @@ async def test_escalation_preserves_filter_reason():
 async def test_escalation_second_call_skipped_when_disabled():
     fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
     fixture["escalate"] = True
-    respx.post(OLLAMA_URL).mock(return_value=litellm_response(fixture))
+    respx.post(OLLAMA_URL).mock(return_value=ollama_response(fixture))
     config = AIConfig(enabled=True, escalation_enabled=False)
     ev = await AIEvaluator(config).evaluate(make_profile(), make_listing())
     assert respx.calls.call_count == 1
@@ -140,7 +140,7 @@ async def test_escalation_second_call_skipped_when_disabled():
 async def test_escalation_skipped_when_keyword_score_too_low():
     fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
     fixture["escalate"] = True
-    respx.post(OLLAMA_URL).mock(return_value=litellm_response(fixture))
+    respx.post(OLLAMA_URL).mock(return_value=ollama_response(fixture))
     config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0)
     low_score_listing = make_listing(relevance_score=50.0)
     ev = await AIEvaluator(config).evaluate(make_profile(), low_score_listing)
