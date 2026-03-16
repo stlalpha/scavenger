@@ -110,19 +110,13 @@ class ResultsFeed(Widget):
             self.post_message(ListingSelected(listing=self._listings[self.cursor]))
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        """Sync our cursor reactive when the ListView moves via its own key bindings (down/up)."""
+        """Sync cursor and show listing when ListView moves (keyboard or mouse)."""
         event.stop()
-        if event.item is None:
-            return
-        item_id = event.item.id or ""
-        if item_id.startswith("listing-"):
-            listing_id = item_id.removeprefix("listing-")
-            for i, listing in enumerate(self._listings):
-                if listing.id == listing_id:
-                    if self.cursor != i:
-                        self.cursor = i
-                    self.post_message(ListingSelected(listing=listing))
-                    break
+        list_view = self.query_one(ListView)
+        i = list_view.index
+        if i is not None and 0 <= i < len(self._listings):
+            self.cursor = i
+            self.post_message(ListingSelected(listing=self._listings[i]))
 
     def watch_cursor(self, cursor: int) -> None:
-        self._sync_list_view()
+        self._update_cursor()
