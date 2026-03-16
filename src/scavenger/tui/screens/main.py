@@ -5,7 +5,7 @@ from scavenger.tui.widgets.profile_sidebar import ProfileSidebar
 from scavenger.tui.widgets.results_feed import ResultsFeed
 from scavenger.tui.widgets.detail_panel import DetailPanel
 from scavenger.tui.widgets.status_bar import StatusBar
-from scavenger.tui.messages import ListingSelected, ProfileSelected, DataUpdated
+from scavenger.tui.messages import ListingSelected, ListingOpened, ProfileSelected, DataUpdated
 from scavenger.models import Profile
 
 
@@ -36,6 +36,14 @@ class MainScreen(Screen):
 
     def on_listing_selected(self, event: ListingSelected) -> None:
         self.query_one(DetailPanel).show_listing(event.listing)
+
+    def on_listing_opened(self, event: ListingOpened) -> None:
+        if event.listing.status == "new":
+            data_layer = getattr(self.app, "_data_layer", None)
+            if data_layer:
+                async def _mark() -> None:
+                    await data_layer.mark_seen(event.listing.id)
+                self.app.run_worker(_mark(), exclusive=False)
 
     def on_profile_selected(self, event: ProfileSelected) -> None:
         self.app.set_active_profile(event.profile_id)  # type: ignore[attr-defined]

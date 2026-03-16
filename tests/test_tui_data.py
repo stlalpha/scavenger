@@ -78,3 +78,71 @@ async def test_mark_snoozed_does_not_crash_get_listings(tmp_path):
     listings = await layer.get_listings(profile_id=None, limit=10)
     assert all(l.id != "id0" or l.status == "snoozed" for l in listings)
     await db.close()
+
+
+async def test_mark_seen_transitions_new_to_seen(tmp_path):
+    """mark_seen should change status from 'new' to 'seen'."""
+    db = await make_db_with_listings(tmp_path)
+    layer = DataLayer(db)
+    listing = await db.get_listing("id0")
+    assert listing.status == "new"
+    await layer.mark_seen("id0")
+    listing = await db.get_listing("id0")
+    assert listing.status == "seen"
+    await db.close()
+
+
+async def test_mark_seen_does_not_downgrade_saved(tmp_path):
+    """mark_seen should NOT overwrite 'saved' status with 'seen'."""
+    db = await make_db_with_listings(tmp_path)
+    layer = DataLayer(db)
+    await layer.mark_status("id0", "saved")
+    await layer.mark_seen("id0")
+    listing = await db.get_listing("id0")
+    assert listing.status == "saved"
+    await db.close()
+
+
+async def test_mark_seen_is_idempotent(tmp_path):
+    """Calling mark_seen twice should not raise or change status."""
+    db = await make_db_with_listings(tmp_path)
+    layer = DataLayer(db)
+    await layer.mark_seen("id0")
+    await layer.mark_seen("id0")
+    listing = await db.get_listing("id0")
+    assert listing.status == "seen"
+    await db.close()
+
+
+async def test_mark_seen_nonexistent_id_does_not_crash(tmp_path):
+    """mark_seen on a missing ID should silently do nothing."""
+    db = await make_db_with_listings(tmp_path)
+    layer = DataLayer(db)
+    await layer.mark_seen("nonexistent")  # must not raise
+    await db.close()
+
+
+async def test_get_last_source_poll_returns_most_recent(tmp_path):
+    """get_last_source_poll should return the most recent last_polled across all sources."""
+    db = await make_db_with_listings(tmp_path)
+    layer = DataLayer(db)
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    older = now - timedelta(minutes=30)
+    newer = now - timedelta(minutes=5)
+    await db.update_source_state("ebay", last_polled=older)
+    await db.update_source_state("craigslist", last_polled=newer)
+    last_poll = await layer.get_last_source_poll()
+    assert last_poll is not None
+    # Should be the newer timestamp (within a second tolerance)
+    assert abs((last_poll - newer).total_seconds()) < 1
+    await db.close()
+
+
+async def test_get_last_source_poll_returns_none_when_no_sources(tmp_path):
+    """get_last_source_poll returns None when no sources have been polled."""
+    db = await make_db_with_listings(tmp_path)
+    layer = DataLayer(db)
+    last_poll = await layer.get_last_source_poll()
+    assert last_poll is None
+    await db.close()

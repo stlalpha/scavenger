@@ -1,4 +1,4 @@
-from scavenger.tui.messages import DataUpdated, ListingSelected, ProfileSelected
+from scavenger.tui.messages import DataUpdated, ListingSelected, ListingOpened, ProfileSelected
 from datetime import datetime, timezone
 from scavenger.models import Listing
 
@@ -27,6 +27,12 @@ def test_listing_selected_message():
 def test_listing_selected_none():
     msg = ListingSelected(listing=None)
     assert msg.listing is None
+
+
+def test_listing_opened_message():
+    listing = make_listing()
+    msg = ListingOpened(listing=listing)
+    assert msg.listing.id == "abc"
 
 
 def test_profile_selected_message():

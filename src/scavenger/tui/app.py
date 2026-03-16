@@ -52,12 +52,14 @@ class ScavengerApp(App):
             stats = await self._data_layer.get_profile_stats()
             # Post to the current screen, not the app — messages don't bubble down
             self.screen.post_message(DataUpdated(listings=listings, profile_stats=stats))
-            # Check daemon socket
+            # Check daemon socket and last source poll
             daemon_up = self._check_daemon()
+            last_source_poll = await self._data_layer.get_last_source_poll()
             try:
                 bar = self.query_one(StatusBar)
                 bar.set_daemon_status(daemon_up)
-                bar.set_last_poll(datetime.now(timezone.utc))
+                if last_source_poll:
+                    bar.set_last_poll(last_source_poll)
             except Exception:
                 pass
         except Exception as e:

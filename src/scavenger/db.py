@@ -206,6 +206,16 @@ class Database:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def get_most_recent_poll(self) -> datetime | None:
+        """Return the most recent last_polled timestamp across all sources."""
+        cursor = await self._conn.execute(
+            "SELECT MAX(last_polled) FROM sources WHERE last_polled IS NOT NULL"
+        )
+        row = await cursor.fetchone()
+        if row and row[0]:
+            return datetime.fromisoformat(row[0])
+        return None
+
     async def update_source_state(
         self,
         plugin_id: str,

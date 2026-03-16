@@ -5,7 +5,7 @@ from textual.widget import Widget
 from textual.widgets import ListItem, ListView, Label
 from textual.reactive import reactive
 from scavenger.models import Listing
-from scavenger.tui.messages import ListingSelected
+from scavenger.tui.messages import ListingSelected, ListingOpened
 
 
 def _age(dt: datetime) -> str:
@@ -30,12 +30,13 @@ def _has_notable(listing: Listing) -> bool:
 
 
 def _card_label(listing: Listing) -> str:
+    unread = "● " if listing.status == "new" else "  "
     star = "★ " if _has_notable(listing) else ""
     price = f"${listing.price:.0f}" if listing.price else "—"
     source = listing.source_id[:2].upper()
     age = _age(listing.first_seen)
     title = listing.title[:40] + ("…" if len(listing.title) > 40 else "")
-    return f"{star}{title}\n  {price} · {source} · {age}"
+    return f"{unread}{star}{title}\n  {price} · {source} · {age}"
 
 
 class ResultsFeed(Widget):
@@ -44,6 +45,7 @@ class ResultsFeed(Widget):
         ("k", "cursor_up", "Up"),
         ("down", "cursor_down", "Down"),
         ("up", "cursor_up", "Up"),
+        ("enter", "open_listing", "Open"),
     ]
 
     DEFAULT_CSS = """
@@ -117,6 +119,18 @@ class ResultsFeed(Widget):
         if i is not None and 0 <= i < len(self._listings):
             self.cursor = i
             self.post_message(ListingSelected(listing=self._listings[i]))
+
+    def action_open_listing(self) -> None:
+        if self._listings and 0 <= self.cursor < len(self._listings):
+            self.post_message(ListingOpened(listing=self._listings[self.cursor]))
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Handle click/Enter on ListView item."""
+        event.stop()
+        list_view = self.query_one(ListView)
+        i = list_view.index
+        if i is not None and 0 <= i < len(self._listings):
+            self.post_message(ListingOpened(listing=self._listings[i]))
 
     def watch_cursor(self, cursor: int) -> None:
         self._update_cursor()

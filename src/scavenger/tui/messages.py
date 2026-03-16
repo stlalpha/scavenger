@@ -17,6 +17,13 @@ class ListingSelected(Message):
         super().__init__()
 
 
+class ListingOpened(Message):
+    """Posted by ResultsFeed when user explicitly opens a listing (Enter/click)."""
+    def __init__(self, listing: Listing) -> None:
+        self.listing = listing
+        super().__init__()
+
+
 class ProfileSelected(Message):
     """Posted by ProfileSidebar when active profile changes."""
     def __init__(self, profile_id: str | None) -> None:

@@ -1,7 +1,7 @@
 import pytest
 from textual.app import App, ComposeResult
 from scavenger.tui.widgets.profile_sidebar import ProfileSidebar
-from scavenger.tui.widgets.results_feed import ResultsFeed
+from scavenger.tui.widgets.results_feed import ResultsFeed, _card_label
 from scavenger.tui.widgets.detail_panel import DetailPanel
 from scavenger.tui.widgets.status_bar import StatusBar
 from scavenger.models import Profile, Listing
@@ -201,3 +201,60 @@ async def test_status_bar_new_count():
         bar = app.query_one(StatusBar)
         bar.set_new_count(7)
         assert bar.new_today == 7
+
+
+# --- Unread indicator tests ---
+
+
+def test_card_label_shows_unread_dot_for_new_listing():
+    """Listings with status='new' should have an unread indicator in their label."""
+    now = datetime.now(timezone.utc)
+    listing = Listing(
+        id="u1", profile_id="p1", source_id="ebay",
+        title="Sony 50mm f/1.4", url="https://ebay.com/u1",
+        first_seen=now, last_seen=now, relevance_score=80.0,
+        price=150.0, status="new",
+    )
+    label = _card_label(listing)
+    assert "●" in label
+
+
+def test_card_label_no_unread_dot_for_seen_listing():
+    """Listings with status='seen' should NOT have an unread indicator."""
+    now = datetime.now(timezone.utc)
+    listing = Listing(
+        id="u2", profile_id="p1", source_id="ebay",
+        title="Sony 50mm f/1.4", url="https://ebay.com/u2",
+        first_seen=now, last_seen=now, relevance_score=80.0,
+        price=150.0, status="seen",
+    )
+    label = _card_label(listing)
+    assert "●" not in label
+
+
+def test_card_label_no_unread_dot_for_saved_listing():
+    """Listings with status='saved' should NOT have an unread indicator."""
+    now = datetime.now(timezone.utc)
+    listing = Listing(
+        id="u3", profile_id="p1", source_id="ebay",
+        title="Sony 50mm f/1.4", url="https://ebay.com/u3",
+        first_seen=now, last_seen=now, relevance_score=80.0,
+        price=150.0, status="saved",
+    )
+    label = _card_label(listing)
+    assert "●" not in label
+
+
+def test_card_label_unread_dot_coexists_with_notable_star():
+    """A new listing with a notable AI evaluation should show both ● and ★."""
+    now = datetime.now(timezone.utc)
+    listing = Listing(
+        id="u4", profile_id="p1", source_id="ebay",
+        title="Sony Zeiss 85mm", url="https://ebay.com/u4",
+        first_seen=now, last_seen=now, relevance_score=90.0,
+        price=300.0, status="new",
+        ai_evaluation='{"relevant": true, "reason": "Great", "notable": "Zeiss variant", "escalate": false}',
+    )
+    label = _card_label(listing)
+    assert "●" in label
+    assert "★" in label
