@@ -73,12 +73,12 @@ class ResultsFeed(Widget):
             return self._listings[self.cursor]
         return None
 
-    def update_listings(self, listings: list[Listing]) -> None:
+    async def update_listings(self, listings: list[Listing]) -> None:
         self._listings = listings
         list_view = self.query_one(ListView)
-        list_view.clear()
+        await list_view.clear()
         for listing in listings:
-            list_view.append(ListItem(Label(_card_label(listing)), id=f"listing-{listing.id}"))
+            await list_view.append(ListItem(Label(_card_label(listing))))
         self.cursor = min(self.cursor, max(0, len(listings) - 1))
         self._update_cursor()
 

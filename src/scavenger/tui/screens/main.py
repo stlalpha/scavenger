@@ -40,10 +40,9 @@ class MainScreen(Screen):
     def on_profile_selected(self, event: ProfileSelected) -> None:
         self.app.set_active_profile(event.profile_id)  # type: ignore[attr-defined]
 
-    def on_data_updated(self, event: DataUpdated) -> None:
+    async def on_data_updated(self, event: DataUpdated) -> None:
         feed = self.query_one(ResultsFeed)
-        self.query_one(ResultsFeed).update_listings(event.listings)
+        await feed.update_listings(event.listings)
         self.query_one(ProfileSidebar).update_stats(event.profile_stats)
         self.query_one(StatusBar).set_new_count(sum(event.profile_stats.values()))
-        # Refresh detail panel with updated listing data
         self.query_one(DetailPanel).show_listing(feed.focused_listing)
