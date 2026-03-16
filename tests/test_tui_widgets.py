@@ -58,8 +58,8 @@ async def test_sidebar_unread_count():
 class FeedTestApp(App):
     def compose(self) -> ComposeResult:
         yield ResultsFeed()
-    def on_mount(self) -> None:
-        self.query_one(ResultsFeed).update_listings(make_listings(3))
+    async def on_mount(self) -> None:
+        await self.query_one(ResultsFeed).update_listings(make_listings(3))
 
 
 async def test_feed_renders_listings():
@@ -82,8 +82,9 @@ async def test_feed_j_moves_cursor_down():
 async def test_feed_down_arrow_moves_cursor():
     app = FeedTestApp()
     async with app.run_test(size=(80, 30)) as pilot:
-        await pilot.pause(0.1)
+        await pilot.pause(0.3)
         await pilot.press("down")
+        await pilot.pause(0.1)
         assert app.query_one(ResultsFeed).cursor == 1
 
 
@@ -115,8 +116,8 @@ async def test_feed_notable_star():
     class StarApp(App):
         def compose(self) -> ComposeResult:
             yield ResultsFeed()
-        def on_mount(self) -> None:
-            self.query_one(ResultsFeed).update_listings(listings)
+        async def on_mount(self) -> None:
+            await self.query_one(ResultsFeed).update_listings(listings)
     app = StarApp()
     async with app.run_test(size=(80, 30)) as pilot:
         await pilot.pause(0.1)
