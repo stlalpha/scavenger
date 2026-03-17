@@ -5,6 +5,7 @@ from urllib.parse import quote_plus
 
 from scavenger.dedup import content_hash
 from scavenger.models import Listing, Profile
+from scavenger.plugins.base import BotDetectedError
 from scavenger.plugins.browser import new_page
 
 logger = logging.getLogger(__name__)
@@ -67,9 +68,19 @@ class FacebookPlugin:
             await page.goto(url, wait_until="networkidle", timeout=45000)
 
             title = await page.title()
+            current_url = page.url
             if "log in" in title.lower() or "sign in" in title.lower():
-                logger.warning("Facebook: not logged in — log into Facebook in the Chrome session first")
-                return []
+                raise BotDetectedError("facebook", "https://www.facebook.com/login", "Facebook not logged in")
+
+            # Detect redirect to main feed instead of marketplace
+            if "/marketplace/" not in current_url:
+                logger.warning("Facebook: redirected away from marketplace (url: %s)", current_url)
+                # Retry once
+                await page.goto(url, wait_until="networkidle", timeout=45000)
+                current_url = page.url
+                if "/marketplace/" not in current_url:
+                    logger.warning("Facebook: marketplace redirect failed twice")
+                    return []
 
             # Scroll down a few times to load more results
             for _ in range(3):
