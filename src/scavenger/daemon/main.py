@@ -10,6 +10,7 @@ from scavenger.db import Database
 from scavenger.models import Profile, Listing
 from scavenger.plugins.ebay import EbayPlugin
 from scavenger.plugins.craigslist import CraigslistPlugin
+from scavenger.plugins.facebook import FacebookPlugin
 from scavenger.scoring import score_listing
 from scavenger.ai.evaluator import AIEvaluator, NoopEvaluator
 from scavenger.ai.models import AIConfig
@@ -21,6 +22,7 @@ def _make_plugins(config: AppConfig) -> dict:
     return {
         EbayPlugin.plugin_id: EbayPlugin(),
         CraigslistPlugin.plugin_id: CraigslistPlugin(home_zip=home_zip),
+        FacebookPlugin.plugin_id: FacebookPlugin(),
     }
 
 

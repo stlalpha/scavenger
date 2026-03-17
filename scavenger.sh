@@ -76,6 +76,7 @@ ensure_daemon() {
 
 cmd_start() {
     ensure_chrome
+    ensure_logins
     ensure_daemon
     echo
     cmd_status
@@ -138,12 +139,62 @@ cmd_tui() {
     exec uv run scavenger "$@"
 }
 
+# Check if a facebook tab is on a logged-in page (not /login)
+fb_tab_logged_in() {
+    curl -s "http://localhost:${CDP_PORT}/json/list" 2>/dev/null | python3 -c "
+import sys, json
+try:
+    tabs = json.load(sys.stdin)
+except: sys.exit(1)
+for t in tabs:
+    url = t.get('url', '')
+    if 'facebook.com' in url and '/login' not in url and '/recover' not in url:
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null
+}
+
+# Open facebook and wait for the user to log in, polling until they do
+ensure_fb_login() {
+    # Quick check: open facebook.com — if it doesn't redirect to login, we're good
+    curl -s -X PUT "http://localhost:${CDP_PORT}/json/new?https://www.facebook.com/" >/dev/null
+    sleep 3
+
+    if fb_tab_logged_in; then
+        green "Facebook session active"
+        return
+    fi
+
+    # Not logged in — tell the user and poll until they finish
+    echo
+    bold "Facebook login required."
+    dim "Log in to Facebook in the Chrome window that just opened."
+    dim "Waiting..."
+    echo
+
+    while ! fb_tab_logged_in; do
+        sleep 2
+    done
+    green "Facebook login verified"
+}
+
+# Check which sources need logins and handle them
+ensure_logins() {
+    local config="${HOME}/.config/scavenger/config.toml"
+    [ -f "$config" ] || return
+
+    if grep -q '"facebook"' "$config" 2>/dev/null; then
+        ensure_fb_login
+    fi
+}
+
 case "${1:-}" in
     start)   cmd_start ;;
     stop)    cmd_stop ;;
     status)  cmd_status ;;
     log)     cmd_log ;;
+    login)   ensure_chrome; ensure_logins ;;
     tui)     shift; cmd_tui "$@" ;;
     restart) cmd_stop; echo; cmd_start ;;
-    *)       echo "Usage: $0 {start|stop|status|log|tui|restart}" ;;
+    *)       echo "Usage: $0 {start|stop|status|log|login|tui|restart}" ;;
 esac
