@@ -30,7 +30,7 @@ STATUS_LABEL = {
 }
 
 
-def _render(listing: Listing) -> str:
+def _render(listing: Listing, img_index: int = 0, img_total: int = 0) -> str:
     clr = SRC_CLR.get(listing.source_id, "#75715e")
     src = f"[{clr} bold]{listing.source_id.upper()}[/]"
     status = STATUS_LABEL.get(listing.status, listing.status)
@@ -66,8 +66,17 @@ def _render(listing: Listing) -> str:
         lines.append(f"[#75715e]{listing.description}[/]")
 
     lines.append("")
+
+    # Image nav hint
+    if img_total > 1:
+        nav = f"[#75715e]\\[<][/][#f8f8f2] {img_index + 1}/{img_total} [/][#75715e]\\[>][/]  "
+    elif img_total == 1:
+        nav = "[#3a3a3a]1/1[/]  "
+    else:
+        nav = ""
+
     lines.append(
-        "[#3a3a3a]╶[/] "
+        f"[#3a3a3a]╶[/] {nav}"
         "[#75715e]\\[o][/][#f8f8f2]open[/]  "
         "[#75715e]\\[s][/][#f8f8f2]save[/]  "
         "[#75715e]\\[d][/][#f8f8f2]dismiss[/]  "
@@ -85,6 +94,8 @@ class DetailPanel(Widget):
         ("s", "save_listing", "Save"),
         ("d", "dismiss_listing", "Dismiss"),
         ("n", "snooze_listing", "Snooze"),
+        ("full_stop", "next_image", ">"),
+        ("comma", "prev_image", "<"),
     ]
 
     DEFAULT_CSS = """
@@ -110,6 +121,9 @@ class DetailPanel(Widget):
         super().__init__()
         self._listing: Listing | None = None
         self._thumbnail_cache = ThumbnailCache()
+        self._images: list[str] = []
+        self._img_idx: int = 0
+        self._fetching_detail: bool = False
 
     def compose(self) -> ComposeResult:
         yield Static("╶ detail", id="detail-hdr")
@@ -134,6 +148,8 @@ class DetailPanel(Widget):
 
     def show_listing(self, listing: Listing | None) -> None:
         self._listing = listing
+        self._images = []
+        self._img_idx = 0
         content = self.query_one("#detail-content", Static)
         hdr = self.query_one("#detail-hdr", Static)
         if listing is None:
@@ -143,19 +159,52 @@ class DetailPanel(Widget):
             return
         clr = SRC_CLR.get(listing.source_id, "#75715e")
         hdr.update(f"╶ detail [{clr}]{listing.source_id}[/]")
-        content.update(_render(listing))
+
+        # Start with the thumbnail from the search results
         if listing.image_urls:
-            self.run_worker(self._load_image(listing.image_urls[0]), exclusive=True)
+            self._images = list(listing.image_urls)
+            self.run_worker(self._load_current_image(), exclusive=True)
         else:
             self._clear_image()
 
-    async def _load_image(self, url: str) -> None:
+        content.update(_render(listing, self._img_idx, len(self._images)))
+
+        # Fetch full gallery from the detail page in background
+        if listing.url and listing.url.startswith("http"):
+            self._fetching_detail = True
+            self.run_worker(self._fetch_detail_images(listing.url, listing.id), exclusive=False, group="detail-images")
+
+    async def _fetch_detail_images(self, url: str, listing_id: str) -> None:
+        """Scrape the listing detail page for all images."""
+        try:
+            from scavenger.plugins.detail_scraper import scrape_detail_images
+            images = await scrape_detail_images(url)
+            # Only update if we're still showing the same listing
+            if self._listing and self._listing.id == listing_id and images:
+                self._images = images
+                self._img_idx = 0
+                await self._load_current_image()
+                self._update_content()
+        except Exception as e:
+            logger.debug("Detail image fetch failed: %s", e)
+        finally:
+            self._fetching_detail = False
+
+    def _update_content(self) -> None:
+        if self._listing:
+            content = self.query_one("#detail-content", Static)
+            content.update(_render(self._listing, self._img_idx, len(self._images)))
+
+    async def _load_current_image(self) -> None:
+        if not self._images or not HAS_IMAGE_WIDGET:
+            return
+        url = self._images[self._img_idx]
         result = await self._thumbnail_cache.get(url)
-        if isinstance(result, Path) and HAS_IMAGE_WIDGET:
+        if isinstance(result, Path):
             try:
                 self.query_one("#hero-image", KittyImage).image = str(result)
             except Exception as e:
-                logger.debug("Failed to render hero image: %s", e)
+                logger.debug("Failed to render image: %s", e)
         else:
             self._clear_image()
 
@@ -165,6 +214,18 @@ class DetailPanel(Widget):
                 self.query_one("#hero-image", KittyImage).image = ""
             except Exception:
                 pass
+
+    def action_next_image(self) -> None:
+        if self._images and len(self._images) > 1:
+            self._img_idx = (self._img_idx + 1) % len(self._images)
+            self.run_worker(self._load_current_image(), exclusive=True)
+            self._update_content()
+
+    def action_prev_image(self) -> None:
+        if self._images and len(self._images) > 1:
+            self._img_idx = (self._img_idx - 1) % len(self._images)
+            self.run_worker(self._load_current_image(), exclusive=True)
+            self._update_content()
 
     def _mark_status(self, status: str) -> None:
         if not self._listing:
