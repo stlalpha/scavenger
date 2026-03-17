@@ -11,6 +11,7 @@ from scavenger.models import Profile, Listing
 from scavenger.plugins.ebay import EbayPlugin
 from scavenger.plugins.craigslist import CraigslistPlugin
 from scavenger.plugins.facebook import FacebookPlugin
+from scavenger.plugins.base import BotDetectedError
 from scavenger.scoring import score_listing
 from scavenger.ai.evaluator import AIEvaluator, NoopEvaluator
 from scavenger.ai.models import AIConfig
@@ -36,6 +37,7 @@ class Daemon:
         self._plugins = _make_plugins(config)
         self._evaluator = AIEvaluator(ai_config) if (ai_config and ai_config.enabled) else NoopEvaluator()
         self._active_polls: set[str] = set()  # source_ids currently being polled
+        self._bot_blocks: dict[str, str] = {}  # plugin_id -> url needing manual verification
 
     def _register_profiles(self) -> None:
         for profile in self._config.profiles:
@@ -81,6 +83,10 @@ class Daemon:
                     if await self._db.upsert_listing(listing):
                         new_listings.append(listing)
                 await self._db.update_source_state(source_id, last_polled=datetime.now(timezone.utc))
+                self._bot_blocks.pop(source_id, None)  # clear if previously blocked
+            except BotDetectedError as e:
+                logger.warning("Bot block: %s — %s", e.plugin_id, e)
+                self._bot_blocks[e.plugin_id] = e.url
             except Exception:
                 logger.exception("Poll failed for %s/%s", profile.id, source_id)
                 state = await self._db.get_source_state(source_id)
@@ -132,6 +138,7 @@ class Daemon:
             "state": "running",
             "active_polls": sorted(self._active_polls),
             "profiles": [p.id for p in self._config.profiles if p.enabled],
+            "bot_blocks": dict(self._bot_blocks),
         }
 
     async def _handle_reload(self) -> None:

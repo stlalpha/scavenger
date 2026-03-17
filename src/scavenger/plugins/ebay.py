@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from scavenger.dedup import content_hash
 from scavenger.models import Listing, Profile
+from scavenger.plugins.base import BotDetectedError
 from scavenger.plugins.browser import new_page
 
 logger = logging.getLogger(__name__)
@@ -70,8 +71,7 @@ class EbayPlugin:
             logger.debug("eBay: page loaded, title=%r", title)
 
             if "Pardon Our Interruption" in title:
-                logger.warning("eBay: bot detection page — try running Chrome with --remote-debugging-port=9222")
-                return []
+                raise BotDetectedError("ebay", "https://www.ebay.com", "eBay bot detection — needs manual CAPTCHA")
 
             # Try each selector until one matches
             item_selector = None
@@ -116,8 +116,13 @@ class EbayPlugin:
                     price_text = await price_el.inner_text() if price_el else ""
                     price = _extract_price(price_text)
 
-                    image_url = await img_el.get_attribute("src") if img_el else None
-                    image_urls = [image_url] if image_url and not image_url.startswith("data:") else []
+                    image_urls = []
+                    if img_el:
+                        for attr in ("src", "data-src"):
+                            url = await img_el.get_attribute(attr)
+                            if url and not url.startswith("data:") and url.startswith("http"):
+                                image_urls = [url]
+                                break
 
                     location_el = await _query_first(item, LOCATION_SELECTORS)
                     location = (await location_el.inner_text()).strip() if location_el else None

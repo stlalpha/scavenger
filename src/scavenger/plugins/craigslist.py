@@ -101,9 +101,25 @@ class CraigslistPlugin:
                     price_text = await price_el.inner_text() if price_el else ""
                     price = _extract_price(price_text)
 
+                    # Craigslist uses multiple image attributes depending on the layout
+                    image_urls = []
                     img_el = await item.query_selector("img")
-                    image_url = await img_el.get_attribute("src") if img_el else None
-                    image_urls = [image_url] if image_url and not image_url.startswith("data:") else []
+                    if img_el:
+                        for attr in ("src", "data-src"):
+                            url = await img_el.get_attribute(attr)
+                            if url and not url.startswith("data:") and url.startswith("http"):
+                                image_urls = [url]
+                                break
+                    # Gallery div sometimes has data-ids with image hashes
+                    if not image_urls:
+                        gallery = await item.query_selector("[data-ids]")
+                        if gallery:
+                            ids_str = await gallery.get_attribute("data-ids") or ""
+                            # Format: "1:abc123,1:def456" — first one is the thumbnail
+                            if ids_str:
+                                first_id = ids_str.split(",")[0].split(":")[-1].strip()
+                                if first_id:
+                                    image_urls = [f"https://images.craigslist.org/{first_id}_300x300.jpg"]
 
                     listings.append(Listing(
                         id=content_hash(item_url),

@@ -33,6 +33,7 @@ class ScavengerApp(App):
         Binding("s", "save_listing", "Save", show=False),
         Binding("d", "dismiss_listing", "Dismiss", show=False),
         Binding("n", "snooze_listing", "Snooze", show=False),
+        Binding("x", "fix_block", "Fix block", show=False),
         Binding("a", "add_profile", "Add profile", show=False),
         Binding("e", "edit_profile", "Edit profile", show=False),
         Binding("r", "repoll", "Re-poll", show=False),
@@ -45,6 +46,7 @@ class ScavengerApp(App):
         self._config_path = config_path
         self._db: Database | None = None
         self._data_layer: DataLayer | None = None
+        self._notified_blocks: set[str] = set()
         self._active_profile_id: str | None = (
             config.profiles[0].id if config.profiles else None
         )
@@ -86,6 +88,18 @@ class ScavengerApp(App):
                 sidebar.set_daemon_profiles(daemon_status.get("profiles", []))
             except Exception:
                 pass
+            # Alert on bot blocks
+            bot_blocks = daemon_status.get("bot_blocks", {})
+            for plugin_id, url in bot_blocks.items():
+                if plugin_id not in self._notified_blocks:
+                    self._notified_blocks.add(plugin_id)
+                    self.notify(
+                        f"{plugin_id.upper()} blocked — press 'x' to open browser and verify",
+                        severity="warning",
+                        timeout=15,
+                    )
+            # Clear notifications for resolved blocks
+            self._notified_blocks &= set(bot_blocks.keys())
         except Exception as e:
             logger.warning("Poll error: %s", e)
 
@@ -106,13 +120,16 @@ class ScavengerApp(App):
             s.close()
             resp = json.loads(data)
             if resp.get("status") == "ok":
+                data = resp.get("data", {})
                 return {
                     "up": True,
-                    "active_polls": resp.get("data", {}).get("active_polls", []),
+                    "active_polls": data.get("active_polls", []),
+                    "profiles": data.get("profiles", []),
+                    "bot_blocks": data.get("bot_blocks", {}),
                 }
         except Exception:
             pass
-        return {"up": False, "active_polls": []}
+        return {"up": False, "active_polls": [], "profiles": [], "bot_blocks": {}}
 
     async def on_load(self) -> None:
         self._db = Database(self._config.db_path)
@@ -305,6 +322,20 @@ class ScavengerApp(App):
         if result is None:
             self.notify("Daemon not reachable", severity="warning")
         await self._poll()
+
+    def action_fix_block(self) -> None:
+        """Open blocked marketplace URL in visible Chrome for manual verification."""
+        daemon_status = self._check_daemon()
+        bot_blocks = daemon_status.get("bot_blocks", {})
+        if not bot_blocks:
+            self.notify("No blocked sources")
+            return
+        import subprocess, sys
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        for plugin_id, url in bot_blocks.items():
+            subprocess.Popen([opener, url])
+            self.notify(f"Opened {plugin_id.upper()} — complete verification, then press 'r' to re-poll")
+        self._notified_blocks.clear()
 
     def action_show_help(self) -> None:
         self.notify(
