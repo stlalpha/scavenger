@@ -44,10 +44,11 @@ start_chrome() {
         --disable-default-apps
     )
     if [ "$mode" = "headless" ]; then
-        bold "Starting Chrome (headless)..."
-        flags+=(--headless=new --disable-blink-features=AutomationControlled --window-size=1920,1080)
-    else
         bold "Starting Chrome..."
+        # Offscreen real Chrome — eBay detects --headless even with stealth
+        flags+=(--window-position=0,-10000 --window-size=1,1 --disable-blink-features=AutomationControlled)
+    else
+        bold "Starting Chrome (visible)..."
     fi
 
     "${CHROME}" "${flags[@]}" >/dev/null 2>&1 &

@@ -11,17 +11,41 @@ from scavenger.models import Profile, Listing
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 10
-def _strip_fences(text: str) -> str:
-    """Strip markdown code fences from model output."""
+def _extract_json(text: str) -> str:
+    """Extract the first JSON object from model output."""
     text = text.strip()
     if text.startswith("```"):
-        first_nl = text.find("\n")
-        if first_nl != -1:
-            text = text[first_nl + 1:]
+        nl = text.find("\n")
+        if nl != -1:
+            text = text[nl + 1:]
     if text.rstrip().endswith("```"):
-        text = text.rstrip()
-        text = text[: text.rfind("```")].rstrip()
-    return text.strip()
+        text = text[: text.rfind("```")]
+    text = text.strip()
+    start = text.find("{")
+    if start == -1:
+        return text
+    depth = 0
+    in_str = False
+    escape = False
+    for i, ch in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return text[start:]
 
 
 def _match_escalation_keywords(keywords: list[str], title: str, description: str) -> list[str]:
@@ -204,7 +228,7 @@ class AIEvaluator:
             )
             response.raise_for_status()
             data = response.json()
-            return _strip_fences(data["content"][0]["text"])
+            return _extract_json(data["content"][0]["text"])
 
     async def _process_batch(
         self, profile: Profile, listings: list[Listing]

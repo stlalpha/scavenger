@@ -67,10 +67,9 @@ class CraigslistPlugin:
         return self._resolved_cities
 
     async def fetch(self, profile: Profile) -> list[Listing]:
-        # Craigslist supports OR with pipe: a | b | c
+        # Craigslist doesn't support grouped OR — use first variant per group
         keywords = " ".join(
-            kw if isinstance(kw, str)
-            else " | ".join(kw) if len(kw) > 1 else kw[0]
+            kw if isinstance(kw, str) else kw[0]
             for kw in profile.keywords
         )
         cities = await self._get_cities()
