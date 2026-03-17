@@ -629,6 +629,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "term-image" },
     { name = "textual" },
+    { name = "textual-image" },
 ]
 
 [package.optional-dependencies]
@@ -657,6 +658,7 @@ requires-dist = [
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "term-image", specifier = ">=0.7" },
     { name = "textual", specifier = ">=0.60" },
+    { name = "textual-image", specifier = ">=0.8" },
     { name = "tomli-w", marker = "extra == 'scraping'", specifier = ">=1.0" },
 ]
 provides-extras = ["dev", "scraping"]
@@ -698,6 +700,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/72/23/8c709655c5f2208ee82ab81b8104802421865535c278a7649b842b129db1/textual-8.1.1.tar.gz", hash = "sha256:eef0256a6131f06a20ad7576412138c1f30f92ddeedd055953c08d97044bc317", size = 1843002, upload-time = "2026-03-10T10:01:38.493Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/50/21/421b02bf5943172b7a9320712a5e0d74a02a8f7597284e3f8b5b06c70b8d/textual-8.1.1-py3-none-any.whl", hash = "sha256:6712f96e335cd782e76193dee16b9c8875fe0699d923bc8d3f1228fd23e773a6", size = 719598, upload-time = "2026-03-10T10:01:48.318Z" },
+]
+
+[[package]]
+name = "textual-image"
+version = "0.8.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow" },
+    { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1a/64/e5e49b639794f0ae426f6c19ca541af55b24a30e96df3b03e086688b8ec1/textual_image-0.8.5.tar.gz", hash = "sha256:43d4c0026a4f21fa255f41eac7b0fc1f7410a4c7bc9bf95b908bec901b0a8c3a", size = 109049, upload-time = "2025-12-26T18:38:08.709Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/0d/ca8367c100c09850379f83645abd60f47c051e6b1e7b64adb953bce96be9/textual_image-0.8.5-py3-none-any.whl", hash = "sha256:dffc85458ca8744bce3f17bddbf582b1e086eb52d111f1063753e8dd316fa45d", size = 109618, upload-time = "2025-12-26T18:38:07.11Z" },
 ]
 
 [[package]]
