@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS listings (
     last_seen TEXT NOT NULL,
     relevance_score REAL NOT NULL DEFAULT 0.0,
     status TEXT NOT NULL DEFAULT 'new',
-    ai_evaluation TEXT
+    ai_evaluation TEXT,
+    snoozed_until TEXT
 );
 
 CREATE TABLE IF NOT EXISTS price_history (
@@ -70,12 +71,14 @@ def _listing_to_row(listing: Listing) -> dict:
         "relevance_score": listing.relevance_score,
         "status": listing.status,
         "ai_evaluation": listing.ai_evaluation,
+        "snoozed_until": None,
     }
 
 
 def _row_to_listing(row: aiosqlite.Row) -> Listing:
     d = dict(row)
     d["image_urls"] = json.loads(d["image_urls"])
+    d.pop("snoozed_until", None)
     return Listing(**d)
 
 
@@ -100,6 +103,11 @@ class Database:
                 "ALTER TABLE listings ADD COLUMN ai_evaluation TEXT"
             )
             await self._conn.commit()
+        if "snoozed_until" not in columns:
+            await self._conn.execute(
+                "ALTER TABLE listings ADD COLUMN snoozed_until TEXT"
+            )
+            await self._conn.commit()
 
     async def close(self) -> None:
         if self._conn:
@@ -114,7 +122,7 @@ class Database:
                 :id, :profile_id, :source_id, :title, :description,
                 :price, :currency, :condition, :url, :image_urls,
                 :location, :first_seen, :last_seen, :relevance_score, :status,
-                :ai_evaluation
+                :ai_evaluation, :snoozed_until
             )""",
             row,
         )
@@ -175,12 +183,30 @@ class Database:
         )
         await self._conn.commit()
 
+    async def snooze_listing(self, listing_id: str, until: datetime) -> None:
+        """Snooze a listing until the given time."""
+        await self._conn.execute(
+            "UPDATE listings SET status='snoozed', snoozed_until=? WHERE id=?",
+            (until.isoformat(), listing_id),
+        )
+        await self._conn.commit()
+
+    async def unsnooze_expired(self) -> int:
+        """Un-snooze listings whose snooze has expired. Returns count."""
+        cursor = await self._conn.execute(
+            "UPDATE listings SET status='seen', snoozed_until=NULL "
+            "WHERE status='snoozed' AND snoozed_until IS NOT NULL AND snoozed_until <= ?",
+            (_now_iso(),),
+        )
+        await self._conn.commit()
+        return cursor.rowcount
+
     async def get_active_listings(
         self, profile_id: str | None = None, limit: int = 100
     ) -> list[Listing]:
-        """Get listings excluding dismissed status, sorted by first_seen DESC."""
-        conditions = ["status NOT IN ('dismissed', 'snoozed')"]
-        params: list = []
+        """Get listings excluding dismissed and actively snoozed, sorted by first_seen DESC."""
+        conditions = ["(status != 'dismissed' AND (status != 'snoozed' OR snoozed_until <= ?))"]
+        params: list = [_now_iso()]
         if profile_id:
             conditions.append("profile_id=?")
             params.append(profile_id)

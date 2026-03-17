@@ -1,7 +1,9 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from scavenger.db import Database
 from scavenger.models import Listing
+
+SNOOZE_DURATION = timedelta(hours=24)
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +15,7 @@ class DataLayer:
     async def get_listings(
         self, profile_id: str | None, limit: int = 100
     ) -> list[Listing]:
+        await self._db.unsnooze_expired()
         return await self._db.get_active_listings(profile_id=profile_id, limit=limit)
 
     async def get_profile_stats(self) -> dict[str, int]:
@@ -23,7 +26,11 @@ class DataLayer:
         listing = await self._db.get_listing(listing_id)
         if listing is None:
             return
-        await self._db.update_listing_status(listing_id, status)
+        if status == "snoozed":
+            until = datetime.now(timezone.utc) + SNOOZE_DURATION
+            await self._db.snooze_listing(listing_id, until)
+        else:
+            await self._db.update_listing_status(listing_id, status)
 
     async def mark_seen(self, listing_id: str) -> None:
         """Transition a listing from 'new' to 'seen'. Does not downgrade other statuses."""

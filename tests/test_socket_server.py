@@ -1,17 +1,20 @@
 import asyncio
 import json
+import tempfile
 import pytest
 from pathlib import Path
 from scavenger.daemon.socket_server import SocketServer
 
 
 @pytest.fixture
-async def server(tmp_path):
-    sock_path = tmp_path / "test.sock"
-    srv = SocketServer(sock_path)
-    await srv.start()
-    yield srv, sock_path
-    await srv.stop()
+async def server():
+    # Use /tmp directly — macOS tmp_path is too long for AF_UNIX (104-byte limit)
+    with tempfile.TemporaryDirectory(dir="/tmp") as td:
+        sock_path = Path(td) / "s.sock"
+        srv = SocketServer(sock_path)
+        await srv.start()
+        yield srv, sock_path
+        await srv.stop()
 
 
 async def send_command(sock_path: Path, command: dict) -> dict:
