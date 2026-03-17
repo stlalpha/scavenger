@@ -17,6 +17,38 @@ def _extract_price(text: str) -> float | None:
     return float(m.group(1).replace(",", "")) if m else None
 
 
+_BG_URL_RE = re.compile(r'url\(["\']?(https?://[^"\')\s]+)')
+
+
+async def _extract_cl_image(item) -> list[str]:
+    """Extract image URL from a Craigslist search result item."""
+    # 1. Direct img tag with src or data-src
+    for sel in ("img", ".swipe img", ".gallery img"):
+        img = await item.query_selector(sel)
+        if img:
+            for attr in ("src", "data-src"):
+                url = await img.get_attribute(attr)
+                if url and url.startswith("http") and "data:" not in url:
+                    return [url]
+    # 2. Gallery div with data-ids (Craigslist image hash format)
+    gallery = await item.query_selector("[data-ids]")
+    if gallery:
+        ids_str = await gallery.get_attribute("data-ids") or ""
+        if ids_str:
+            first_id = ids_str.split(",")[0].split(":")[-1].strip()
+            if first_id:
+                return [f"https://images.craigslist.org/{first_id}_300x300.jpg"]
+    # 3. Background image in style attribute
+    for sel in (".swipe", ".gallery", "[style*=background]"):
+        el = await item.query_selector(sel)
+        if el:
+            style = await el.get_attribute("style") or ""
+            m = _BG_URL_RE.search(style)
+            if m:
+                return [m.group(1)]
+    return []
+
+
 class CraigslistPlugin:
     plugin_id = "craigslist"
 
@@ -101,25 +133,7 @@ class CraigslistPlugin:
                     price_text = await price_el.inner_text() if price_el else ""
                     price = _extract_price(price_text)
 
-                    # Craigslist uses multiple image attributes depending on the layout
-                    image_urls = []
-                    img_el = await item.query_selector("img")
-                    if img_el:
-                        for attr in ("src", "data-src"):
-                            url = await img_el.get_attribute(attr)
-                            if url and not url.startswith("data:") and url.startswith("http"):
-                                image_urls = [url]
-                                break
-                    # Gallery div sometimes has data-ids with image hashes
-                    if not image_urls:
-                        gallery = await item.query_selector("[data-ids]")
-                        if gallery:
-                            ids_str = await gallery.get_attribute("data-ids") or ""
-                            # Format: "1:abc123,1:def456" — first one is the thumbnail
-                            if ids_str:
-                                first_id = ids_str.split(",")[0].split(":")[-1].strip()
-                                if first_id:
-                                    image_urls = [f"https://images.craigslist.org/{first_id}_300x300.jpg"]
+                    image_urls = await _extract_cl_image(item)
 
                     listings.append(Listing(
                         id=content_hash(item_url),

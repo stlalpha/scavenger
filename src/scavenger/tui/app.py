@@ -336,35 +336,29 @@ class ScavengerApp(App):
         self.run_worker(self._fix_blocks(urls), exclusive=True)
 
     async def _fix_blocks(self, urls: list[str]) -> None:
-        """Stop headless Chrome, start visible, open blocked URLs, wait, restart headless."""
-        import subprocess
+        """Open blocked URLs in the running Chrome via CDP and bring window onscreen."""
+        import httpx as _httpx
         CDP_PORT = 9222
-        CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        CHROME_DATA = "/tmp/scavenger-chrome"
-
-        # Kill headless Chrome
-        result = await asyncio.to_thread(
-            subprocess.run,
-            ["pkill", "-f", f"remote-debugging-port={CDP_PORT}"],
-            capture_output=True,
-        )
-        await asyncio.sleep(1)
-
-        # Start visible Chrome with same data dir
-        proc = await asyncio.create_subprocess_exec(
-            CHROME,
-            f"--remote-debugging-port={CDP_PORT}",
-            f"--user-data-dir={CHROME_DATA}",
-            "--no-first-run", "--disable-default-apps",
-            *urls,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        self.notify("Chrome opened — solve CAPTCHAs / log in, then come back and press 'r'")
-
-        # Wait for user to press r (don't block forever — they'll re-poll manually)
-        # Just leave Chrome visible; the next 'r' press will re-poll through visible Chrome
-        # which will work. The daemon restart or next scavenger.sh start will go back to headless.
+        try:
+            async with _httpx.AsyncClient(timeout=5) as client:
+                # Open each blocked URL in a new tab
+                for url in urls:
+                    await client.put(f"http://localhost:{CDP_PORT}/json/new?{url}")
+                # Move Chrome window onscreen via CDP
+                tabs = (await client.get(f"http://localhost:{CDP_PORT}/json/list")).json()
+                if tabs:
+                    ws_url = tabs[0].get("webSocketDebuggerUrl", "")
+                    # Use AppleScript to bring Chrome to front on macOS
+                    import subprocess, sys
+                    if sys.platform == "darwin":
+                        subprocess.Popen([
+                            "osascript", "-e",
+                            'tell application "Google Chrome" to activate',
+                        ])
+        except Exception as e:
+            self.notify(f"Could not open Chrome: {e}", severity="error")
+            return
+        self.notify("Chrome opened — solve CAPTCHAs / log in, then press 'r' to re-poll")
         self._notified_blocks.clear()
 
     def action_show_help(self) -> None:
