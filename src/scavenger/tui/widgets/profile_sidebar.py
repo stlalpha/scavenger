@@ -59,7 +59,7 @@ class ProfileSidebar(Widget):
             for s in profile.sources
         )
         state = "[dim]off[/] " if not profile.enabled else ""
-        return f"{state}{profile.name}{badge}\n  {sources}"
+        return f"{state}{profile.name}{badge} {sources}"
 
     def update_stats(self, stats: dict[str, int]) -> None:
         self._stats = stats

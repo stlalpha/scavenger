@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path, PurePosixPath
-import tempfile
 import httpx
 from scavenger.dedup import content_hash
 
@@ -38,7 +37,6 @@ class ThumbnailCache:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url)
                 response.raise_for_status()
-            # Write to temp file then rename atomically (POSIX atomic)
             tmp = dest.with_suffix(".tmp")
             tmp.write_bytes(response.content)
             tmp.rename(dest)

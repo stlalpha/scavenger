@@ -26,11 +26,13 @@ class StatusBar(Widget):
     StatusBar {
         dock: bottom;
         height: 1;
+        max-height: 1;
+        overflow: hidden;
         background: $panel;
         padding: 0 1;
     }
-    StatusBar #status-left { dock: left; width: auto; }
-    StatusBar #status-right { dock: right; width: auto; text-align: right; }
+    StatusBar #status-left { dock: left; width: auto; max-height: 1; overflow: hidden; }
+    StatusBar #status-right { dock: right; width: auto; max-height: 1; overflow: hidden; }
     """
 
     def __init__(self) -> None:

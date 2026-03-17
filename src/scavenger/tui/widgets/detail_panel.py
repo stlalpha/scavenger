@@ -110,7 +110,7 @@ class DetailPanel(Widget):
         background: $surface;
     }
     DetailPanel VerticalScroll { height: 1fr; padding: 0 2; }
-    DetailPanel #hero-image { height: 20; width: 100%; }
+    DetailPanel #hero-image { height: 15; width: auto; }
     DetailPanel #detail-content { width: 100%; padding: 1 0; }
     """
 
