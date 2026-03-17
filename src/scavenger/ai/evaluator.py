@@ -13,9 +13,9 @@ from scavenger.models import Profile, Listing
 
 logger = logging.getLogger(__name__)
 
-# Suppress litellm's noisy default logging
-logging.getLogger("LiteLLM").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# Let litellm log at DEBUG so it shows in the daemon log
+logging.getLogger("LiteLLM").setLevel(logging.DEBUG)
+logging.getLogger("LiteLLM Router").setLevel(logging.DEBUG)
 
 BATCH_SIZE = 5  # smaller batches = fewer Ollama timeouts
 ESCALATION_DELAY = 1.0  # seconds between Anthropic calls to avoid rate limits
@@ -128,6 +128,7 @@ class AIEvaluator:
 
     async def _call_filter(self, system: str, user: str) -> str:
         """Call the local Ollama model via litellm."""
+        logger.info("filter call: model=%s prompt_len=%d", self._filter_model, len(user))
         response = await acompletion(
             model=self._filter_model,
             messages=[
@@ -139,10 +140,13 @@ class AIEvaluator:
             api_base=self._filter_base,
             response_format={"type": "json_object"},
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        logger.info("filter response: %d chars, model=%s", len(content), response.model)
+        return content
 
     async def _call_frontier(self, system: str, user: str) -> str:
         """Call the Anthropic frontier model via litellm."""
+        logger.info("frontier call: model=%s prompt_len=%d", self._escalation_model, len(user))
         response = await acompletion(
             model=self._escalation_model,
             messages=[
@@ -153,7 +157,9 @@ class AIEvaluator:
             max_tokens=1024,
             timeout=self._config.escalation_timeout_sec,
         )
-        return _extract_json(response.choices[0].message.content)
+        content = _extract_json(response.choices[0].message.content)
+        logger.info("frontier response: %d chars, model=%s", len(content), response.model)
+        return content
 
     async def evaluate(self, profile: Profile, listing: Listing) -> AIEvaluation:
         """Single-listing evaluation with optional keyword-triggered escalation."""
