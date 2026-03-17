@@ -18,7 +18,15 @@ class ScavengerApp(App):
 
     CSS = """
     Screen {
-        background: $background;
+        background: #1a1a1a;
+    }
+    /* Monokai-dark palette as the base */
+    * {
+        scrollbar-background: #1a1a1a;
+        scrollbar-color: #3a3a3a;
+        scrollbar-color-hover: #555;
+        scrollbar-color-active: #fd971f;
+        scrollbar-size: 1 1;
     }
     """
 

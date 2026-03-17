@@ -4,20 +4,16 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Static
 
-SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-SOURCE_COLORS = {"ebay": "yellow", "craigslist": "magenta", "facebook": "blue"}
+SPIN = "⣾⣽⣻⢿⡿⣟⣯⣷"
+SRC_CLR = {"ebay": "#e6db74", "craigslist": "#f92672", "facebook": "#66d9ef"}
 
 
-def _format_age(delta_sec: int) -> str:
-    if delta_sec < 60:
-        return f"{delta_sec}s"
-    if delta_sec < 3600:
-        return f"{delta_sec // 60}m"
-    return f"{delta_sec // 3600}h"
-
-
-def _format_time(dt: datetime) -> str:
-    return dt.astimezone().strftime("%H:%M")
+def _age(sec: int) -> str:
+    if sec < 60:
+        return f"{sec}s"
+    if sec < 3600:
+        return f"{sec // 60}m"
+    return f"{sec // 3600}h"
 
 
 class StatusBar(Widget):
@@ -27,124 +23,109 @@ class StatusBar(Widget):
         height: 1;
         max-height: 1;
         overflow: hidden;
-        background: $panel;
-        color: $text;
+        background: #252525;
+        color: #75715e;
         padding: 0 1;
     }
-    StatusBar #status-left { dock: left; width: auto; max-height: 1; overflow: hidden; }
-    StatusBar #status-right { dock: right; width: auto; max-height: 1; overflow: hidden; }
+    StatusBar #st-l { dock: left; width: auto; max-height: 1; overflow: hidden; }
+    StatusBar #st-r { dock: right; width: auto; max-height: 1; overflow: hidden; }
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self.daemon_reachable: bool = True
-        self.new_today: int = 0
-        self._last_poll_ts: datetime | None = None
-        self._source_states: list[dict] = []
-        self._active_polls: list[str] = []
-        self._spinner_idx: int = 0
-        self._spinner_timer: Timer | None = None
+        self.daemon_up: bool = True
+        self.new_count: int = 0
+        self._last_ts: datetime | None = None
+        self._sources: list[dict] = []
+        self._active: list[str] = []
+        self._si: int = 0
+        self._st: Timer | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static(self._left(), id="status-left")
-        yield Static(self._right(), id="status-right")
+        yield Static(self._left(), id="st-l")
+        yield Static(self._right(), id="st-r")
 
     def _spin(self) -> None:
-        self._spinner_idx += 1
+        self._si += 1
         self._refresh()
 
-    def _start_spinner(self) -> None:
-        if self._spinner_timer is not None:
-            return
-        self._spinner_timer = self.set_interval(0.1, self._spin)
-
-    def _stop_spinner(self) -> None:
-        if self._spinner_timer:
-            self._spinner_timer.stop()
-            self._spinner_timer = None
-
     def _left(self) -> str:
-        parts = []
+        p = []
+        p.append("[#a6e22e]●[/]" if self.daemon_up else "[#f92672]● down[/]")
 
-        if self.daemon_reachable:
-            parts.append("[green]●[/]")
-        else:
-            parts.append("[red]● down[/]")
+        if self._active:
+            f = SPIN[self._si % len(SPIN)]
+            srcs = " ".join(f"[{SRC_CLR.get(s, '#75715e')} bold]{s[:2]}[/]" for s in self._active)
+            p.append(f"[#fd971f]{f}[/] {srcs}")
 
-        if self._active_polls:
-            frame = SPINNER[self._spinner_idx % len(SPINNER)]
-            srcs = " ".join(
-                f"[{SOURCE_COLORS.get(s, 'white')} bold]{s[:2].upper()}[/]"
-                for s in self._active_polls
-            )
-            parts.append(f"[bold yellow]{frame}[/] {srcs}")
-
-        if self._source_states:
-            src_parts = []
+        if self._sources:
+            sp = []
             now = datetime.now(timezone.utc)
-            for src in self._source_states:
-                pid = src["plugin_id"]
-                if pid in self._active_polls:
+            for s in self._sources:
+                pid = s["plugin_id"]
+                if pid in self._active:
                     continue
-                color = SOURCE_COLORS.get(pid, "white")
-                last = src.get("last_polled")
-                errors = src.get("consecutive_errors", 0)
-                if errors > 0:
-                    src_parts.append(f"[{color}]{pid[:2].upper()}[/][red]!{errors}[/]")
+                clr = SRC_CLR.get(pid, "#75715e")
+                last = s.get("last_polled")
+                err = s.get("consecutive_errors", 0)
+                if err > 0:
+                    sp.append(f"[{clr}]{pid[:2]}[/][#f92672]!{err}[/]")
                 elif last:
-                    dt = datetime.fromisoformat(last)
-                    delta = int((now - dt).total_seconds())
-                    src_parts.append(f"[{color}]{pid[:2].upper()}[/][dim] {_format_age(delta)}[/]")
-                else:
-                    src_parts.append(f"[{color} dim]{pid[:2].upper()}[/]")
-            if src_parts:
-                parts.append(" ".join(src_parts))
+                    d = int((now - datetime.fromisoformat(last)).total_seconds())
+                    sp.append(f"[{clr}]{pid[:2]}[/] [#3a3a3a]{_age(d)}[/]")
+            if sp:
+                p.append(" ".join(sp))
 
-        if self.new_today > 0:
-            parts.append(f"[bold cyan]{self.new_today}[/] new")
+        if self.new_count > 0:
+            p.append(f"[bold #66d9ef]{self.new_count}[/] [#75715e]new[/]")
 
-        if self._last_poll_ts:
-            parts.append(f"[dim]{_format_time(self._last_poll_ts)}[/]")
+        if self._last_ts:
+            p.append(f"[#3a3a3a]{self._last_ts.astimezone().strftime('%H:%M')}[/]")
 
-        return " " + " · ".join(parts)
+        return " " + " [#3a3a3a]·[/] ".join(p)
 
     def _right(self) -> str:
         return (
-            "[dim]\\[a][/]dd "
-            "[dim]\\[e][/]dit "
-            "[dim]\\[r][/]epoll "
-            "[dim]\\[x][/]fix "
-            "[dim]\\[?][/]help "
-            "[dim]\\[q][/]uit"
+            "[#3a3a3a]"
+            "a[#75715e]dd[/] "
+            "e[#75715e]dit[/] "
+            "r[#75715e]epoll[/] "
+            "x[#75715e]fix[/] "
+            "?[#75715e]help[/] "
+            "q[#75715e]uit[/]"
+            "[/]"
         )
 
     def _refresh(self) -> None:
         try:
-            self.query_one("#status-left", Static).update(self._left())
+            self.query_one("#st-l", Static).update(self._left())
         except Exception:
             pass
 
-    def set_daemon_status(self, reachable: bool) -> None:
-        self.daemon_reachable = reachable
+    def set_daemon_status(self, up: bool) -> None:
+        self.daemon_up = up
         self._refresh()
 
     def set_active_polls(self, active: list[str]) -> None:
-        was_polling = bool(self._active_polls)
-        self._active_polls = active
-        if active and not was_polling:
-            self._start_spinner()
-        elif not active and was_polling:
-            self._stop_spinner()
+        was = bool(self._active)
+        self._active = active
+        if active and not was:
+            if not self._st:
+                self._st = self.set_interval(0.1, self._spin)
+        elif not active and was:
+            if self._st:
+                self._st.stop()
+                self._st = None
         self._refresh()
 
     def set_last_poll(self, ts: datetime) -> None:
-        self._last_poll_ts = ts
+        self._last_ts = ts
         self._refresh()
 
     def set_source_states(self, states: list[dict]) -> None:
-        self._source_states = states
+        self._sources = states
         self._refresh()
 
     def set_new_count(self, count: int) -> None:
-        self.new_today = count
+        self.new_count = count
         self._refresh()

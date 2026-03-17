@@ -14,7 +14,7 @@ class MainScreen(Screen):
     DEFAULT_CSS = """
     MainScreen {
         layout: vertical;
-        background: $background;
+        background: #1a1a1a;
     }
     MainScreen #main-columns {
         height: 1fr;
@@ -30,8 +30,7 @@ class MainScreen(Screen):
     #left-top ProfileSidebar {
         width: 1fr;
         min-width: 18;
-        max-width: 28;
-        border-right: vkey $panel-darken-2;
+        max-width: 26;
     }
     #left-top ResultsFeed {
         width: 2fr;

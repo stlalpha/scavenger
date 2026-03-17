@@ -13,9 +13,10 @@ from scavenger.models import Profile, Listing
 
 logger = logging.getLogger(__name__)
 
-# Let litellm log at DEBUG so it shows in the daemon log
-logging.getLogger("LiteLLM").setLevel(logging.DEBUG)
-logging.getLogger("LiteLLM Router").setLevel(logging.DEBUG)
+# Suppress litellm internal noise — our own info lines are enough
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+logging.getLogger("LiteLLM Router").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 BATCH_SIZE = 5  # smaller batches = fewer Ollama timeouts
 ESCALATION_DELAY = 1.0  # seconds between Anthropic calls to avoid rate limits

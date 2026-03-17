@@ -7,21 +7,13 @@ from textual.reactive import reactive
 from scavenger.models import Listing
 from scavenger.tui.messages import ListingSelected, ListingOpened
 
-SOURCE_COLORS = {"ebay": "yellow", "craigslist": "magenta", "facebook": "blue"}
-STATUS_ICONS = {
-    "new": "[bold cyan]●[/]",
-    "seen": "[dim]·[/]",
-    "saved": "[bold green]★[/]",
-    "dismissed": "[dim]✕[/]",
-    "snoozed": "[dim yellow]◑[/]",
-}
+SRC_CLR = {"ebay": "#e6db74", "craigslist": "#f92672", "facebook": "#66d9ef"}
 
 
 def _age(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    delta = datetime.now(timezone.utc) - dt
-    s = int(delta.total_seconds())
+    s = int((datetime.now(timezone.utc) - dt).total_seconds())
     if s < 60:
         return "now"
     if s < 3600:
@@ -40,15 +32,21 @@ def _has_notable(listing: Listing) -> bool:
         return False
 
 
-def _card_label(listing: Listing) -> str:
-    icon = STATUS_ICONS.get(listing.status, " ")
-    notable = " [magenta]★[/]" if _has_notable(listing) else ""
-    price = f"[bold]${listing.price:,.0f}[/]" if listing.price else "[dim]—[/]"
-    src_color = SOURCE_COLORS.get(listing.source_id, "white")
-    source = f"[{src_color}]{listing.source_id[:2].upper()}[/]"
-    age = f"[dim]{_age(listing.first_seen)}[/]"
-    title = listing.title
-    return f"{icon}{notable} {title}\n  {price} {source} {age}"
+def _card(listing: Listing) -> str:
+    icons = {
+        "new": "[bold #66d9ef]●[/]",
+        "seen": "[#3a3a3a]·[/]",
+        "saved": "[#a6e22e]★[/]",
+        "dismissed": "[#3a3a3a]✕[/]",
+        "snoozed": "[#e6db74]◑[/]",
+    }
+    icon = icons.get(listing.status, " ")
+    notable = " [#f92672]★[/]" if _has_notable(listing) else ""
+    price = f"[bold #fd971f]${listing.price:,.0f}[/]" if listing.price else "[#3a3a3a]—[/]"
+    clr = SRC_CLR.get(listing.source_id, "#75715e")
+    src = f"[{clr}]{listing.source_id[:2]}[/]"
+    age = f"[#75715e]{_age(listing.first_seen)}[/]"
+    return f"{icon}{notable} [#f8f8f2]{listing.title}[/]\n    {price} {src} {age}"
 
 
 class ResultsFeed(Widget):
@@ -64,26 +62,28 @@ class ResultsFeed(Widget):
     ResultsFeed {
         width: 100%;
         height: 100%;
-        background: $surface;
+        background: #1a1a1a;
+        border-left: solid #333;
     }
-    ResultsFeed #feed-header {
+    ResultsFeed #feed-hdr {
         dock: top;
         height: 1;
         padding: 0 1;
-        color: $text-muted;
-        text-style: bold;
-        background: $panel;
+        background: #252525;
+        color: #75715e;
     }
     ResultsFeed ListView {
         height: 1fr;
         background: transparent;
+        padding: 1 0;
     }
     ResultsFeed ListView > ListItem {
         padding: 0 1;
         height: auto;
+        background: transparent;
     }
     ResultsFeed ListView > ListItem.--highlight {
-        background: $boost;
+        background: #2a2a2a;
     }
     """
 
@@ -95,7 +95,7 @@ class ResultsFeed(Widget):
         self._listing_fingerprint: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Static(" LISTINGS", id="feed-header")
+        yield Static("╶ listings", id="feed-hdr")
         yield ListView()
 
     @property
@@ -112,48 +112,48 @@ class ResultsFeed(Widget):
         self._listing_fingerprint = ""
 
     async def update_listings(self, listings: list[Listing]) -> None:
-        fingerprint = "|".join(f"{l.id}:{l.status}" for l in listings)
-        if fingerprint == self._listing_fingerprint:
+        fp = "|".join(f"{l.id}:{l.status}" for l in listings)
+        if fp == self._listing_fingerprint:
             return
-        self._listing_fingerprint = fingerprint
+        self._listing_fingerprint = fp
         self._listings = listings
-        list_view = self.query_one(ListView)
-        await list_view.clear()
+        lv = self.query_one(ListView)
+        await lv.clear()
         for listing in listings:
-            await list_view.append(ListItem(Label(_card_label(listing))))
+            await lv.append(ListItem(Label(_card(listing))))
         self.cursor = min(self.cursor, max(0, len(listings) - 1))
         self._update_cursor()
         if not listings:
-            await list_view.append(ListItem(Label("[dim italic]  Waiting for results...[/]")))
-        header = self.query_one("#feed-header", Static)
-        new_count = sum(1 for l in listings if l.status == "new")
-        if new_count > 0:
-            header.update(f" LISTINGS [bold cyan]{new_count} new[/]")
+            await lv.append(ListItem(Label("[#75715e italic]  waiting for results…[/]")))
+        hdr = self.query_one("#feed-hdr", Static)
+        nc = sum(1 for l in listings if l.status == "new")
+        if nc > 0:
+            hdr.update(f"╶ listings [bold #66d9ef]{nc} new[/]")
         elif listings:
-            header.update(f" LISTINGS [dim]{len(listings)}[/]")
+            hdr.update(f"╶ listings [#75715e]{len(listings)}[/]")
         else:
-            header.update(" LISTINGS [dim yellow]polling...[/]")
+            hdr.update("╶ listings [#fd971f]polling…[/]")
 
     def has_notable(self, listing_id: str) -> bool:
         return any(_has_notable(l) for l in self._listings if l.id == listing_id)
 
     def action_cursor_down(self) -> None:
         if self._listings:
-            new_cursor = min(self.cursor + 1, len(self._listings) - 1)
-            if new_cursor != self.cursor:
-                self.cursor = new_cursor
+            n = min(self.cursor + 1, len(self._listings) - 1)
+            if n != self.cursor:
+                self.cursor = n
                 self._sync_list_view()
 
     def action_cursor_up(self) -> None:
-        new_cursor = max(self.cursor - 1, 0)
-        if new_cursor != self.cursor:
-            self.cursor = new_cursor
+        n = max(self.cursor - 1, 0)
+        if n != self.cursor:
+            self.cursor = n
             self._sync_list_view()
 
     def _sync_list_view(self) -> None:
-        list_view = self.query_one(ListView)
+        lv = self.query_one(ListView)
         if self._listings and 0 <= self.cursor < len(self._listings):
-            list_view.index = self.cursor
+            lv.index = self.cursor
 
     def _update_cursor(self) -> None:
         self._sync_list_view()
@@ -162,8 +162,8 @@ class ResultsFeed(Widget):
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         event.stop()
-        list_view = self.query_one(ListView)
-        i = list_view.index
+        lv = self.query_one(ListView)
+        i = lv.index
         if i is not None and 0 <= i < len(self._listings):
             self.cursor = i
             self.post_message(ListingSelected(listing=self._listings[i]))
@@ -174,8 +174,8 @@ class ResultsFeed(Widget):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         event.stop()
-        list_view = self.query_one(ListView)
-        i = list_view.index
+        lv = self.query_one(ListView)
+        i = lv.index
         if i is not None and 0 <= i < len(self._listings):
             self.post_message(ListingOpened(listing=self._listings[i]))
 

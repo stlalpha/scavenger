@@ -20,58 +20,58 @@ try:
 except ImportError:
     HAS_IMAGE_WIDGET = False
 
-SOURCE_COLORS = {"ebay": "yellow", "craigslist": "magenta", "facebook": "blue"}
-STATUS_LABELS = {
-    "new": "[bold cyan]NEW[/]",
-    "seen": "[dim]SEEN[/]",
-    "saved": "[bold green]SAVED[/]",
-    "dismissed": "[dim]DISMISSED[/]",
-    "snoozed": "[yellow]SNOOZED[/]",
+SRC_CLR = {"ebay": "#e6db74", "craigslist": "#f92672", "facebook": "#66d9ef"}
+STATUS_LABEL = {
+    "new": "[bold #66d9ef]NEW[/]",
+    "seen": "[#75715e]SEEN[/]",
+    "saved": "[#a6e22e]SAVED[/]",
+    "dismissed": "[#75715e]DISMISSED[/]",
+    "snoozed": "[#e6db74]SNOOZED[/]",
 }
 
 
-def _render_listing(listing: Listing) -> str:
-    src_color = SOURCE_COLORS.get(listing.source_id, "white")
-    source = f"[{src_color} bold]{listing.source_id.upper()}[/]"
-    status = STATUS_LABELS.get(listing.status, listing.status)
-    price = f"[bold]${listing.price:,.2f}[/]" if listing.price else "[dim]no price[/]"
+def _render(listing: Listing) -> str:
+    clr = SRC_CLR.get(listing.source_id, "#75715e")
+    src = f"[{clr} bold]{listing.source_id.upper()}[/]"
+    status = STATUS_LABEL.get(listing.status, listing.status)
+    price = f"[bold #fd971f]${listing.price:,.2f}[/]" if listing.price else "[#75715e]no price[/]"
 
     lines = [
-        f"[bold]{listing.title}[/]",
+        f"[bold #f8f8f2]{listing.title}[/]",
         "",
-        f"  {price}  {source}  {status}",
+        f"  {price}  {src}  {status}",
     ]
 
     if listing.location:
-        lines.append(f"  [dim]{listing.location}[/]")
+        lines.append(f"  [#75715e]{listing.location}[/]")
 
     lines.append("")
-    lines.append(f"  [dim underline]{listing.url}[/]")
+    lines.append(f"  [#75715e underline]{listing.url}[/]")
 
-    # AI evaluation
     if listing.ai_evaluation:
         try:
             ev = json.loads(listing.ai_evaluation)
             if ev.get("notable") or ev.get("reason"):
                 lines.append("")
-                lines.append("[bold magenta]── AI INSIGHT ──[/]")
+                lines.append("[#f92672]╶─── ai insight ───╴[/]")
                 if ev.get("notable"):
-                    lines.append(f"[magenta]★[/] {ev['notable']}")
+                    lines.append(f"  [#f92672]★[/] [#f8f8f2]{ev['notable']}[/]")
                 if ev.get("reason"):
-                    lines.append(f"[dim]{ev['reason']}[/]")
+                    lines.append(f"  [#75715e]{ev['reason']}[/]")
         except Exception:
             pass
 
     if listing.description:
         lines.append("")
-        lines.append(listing.description)
+        lines.append(f"[#75715e]{listing.description}[/]")
 
     lines.append("")
     lines.append(
-        "[dim]\\[o][/][bold] open[/]  "
-        "[dim]\\[s][/][bold] save[/]  "
-        "[dim]\\[d][/][bold] dismiss[/]  "
-        "[dim]\\[n][/][bold] snooze[/]"
+        "[#3a3a3a]╶[/] "
+        "[#75715e]\\[o][/][#f8f8f2]open[/]  "
+        "[#75715e]\\[s][/][#f8f8f2]save[/]  "
+        "[#75715e]\\[d][/][#f8f8f2]dismiss[/]  "
+        "[#75715e]\\[n][/][#f8f8f2]snooze[/]"
     )
 
     return "\n".join(lines)
@@ -91,19 +91,18 @@ class DetailPanel(Widget):
     DetailPanel {
         width: 100%;
         height: 100%;
-        background: $surface;
-        border-left: tall transparent;
+        background: #1e1e1e;
+        border-left: solid #333;
     }
-    DetailPanel:focus { border-left: tall $accent; }
-    DetailPanel #detail-header {
+    DetailPanel:focus { border-left: solid #fd971f; }
+    DetailPanel #detail-hdr {
         dock: top;
         height: 1;
         padding: 0 1;
-        color: $text-muted;
-        text-style: bold;
-        background: $panel;
+        background: #252525;
+        color: #75715e;
     }
-    DetailPanel VerticalScroll { height: 1fr; padding: 0 1; }
+    DetailPanel VerticalScroll { height: 1fr; padding: 1 2; }
     DetailPanel #hero-image { height: 15; width: auto; }
     DetailPanel #detail-content { width: 100%; padding: 1 0; }
     """
@@ -114,11 +113,11 @@ class DetailPanel(Widget):
         self._thumbnail_cache = ThumbnailCache()
 
     def compose(self) -> ComposeResult:
-        yield Static(" DETAIL", id="detail-header")
+        yield Static("╶ detail", id="detail-hdr")
         with VerticalScroll():
             if HAS_IMAGE_WIDGET:
                 yield KittyImage("", id="hero-image")
-            yield Static("[dim italic]  Select a listing[/]", id="detail-content")
+            yield Static("[#75715e italic]  select a listing[/]", id="detail-content")
 
     @property
     def current_listing(self) -> Listing | None:
@@ -137,15 +136,15 @@ class DetailPanel(Widget):
     def show_listing(self, listing: Listing | None) -> None:
         self._listing = listing
         content = self.query_one("#detail-content", Static)
-        header = self.query_one("#detail-header", Static)
+        hdr = self.query_one("#detail-hdr", Static)
         if listing is None:
-            content.update("[dim italic]  Select a listing[/]")
-            header.update(" DETAIL")
+            content.update("[#75715e italic]  select a listing[/]")
+            hdr.update("╶ detail")
             self._clear_image()
             return
-        src_color = SOURCE_COLORS.get(listing.source_id, "white")
-        header.update(f" DETAIL  [{src_color}]{listing.source_id.upper()}[/]")
-        content.update(_render_listing(listing))
+        clr = SRC_CLR.get(listing.source_id, "#75715e")
+        hdr.update(f"╶ detail [{clr}]{listing.source_id}[/]")
+        content.update(_render(listing))
         if listing.image_urls:
             self.run_worker(self._load_image(listing.image_urls[0]), exclusive=True)
         else:
@@ -155,8 +154,7 @@ class DetailPanel(Widget):
         result = await self._thumbnail_cache.get(url)
         if isinstance(result, Path) and HAS_IMAGE_WIDGET:
             try:
-                image_widget = self.query_one("#hero-image", KittyImage)
-                image_widget.image = str(result)
+                self.query_one("#hero-image", KittyImage).image = str(result)
             except Exception as e:
                 logger.debug("Failed to render hero image: %s", e)
         else:
@@ -165,20 +163,19 @@ class DetailPanel(Widget):
     def _clear_image(self) -> None:
         if HAS_IMAGE_WIDGET:
             try:
-                image_widget = self.query_one("#hero-image", KittyImage)
-                image_widget.image = ""
+                self.query_one("#hero-image", KittyImage).image = ""
             except Exception:
                 pass
 
     def _mark_status(self, status: str) -> None:
         if not self._listing:
             return
-        listing_id = self._listing.id
-        data_layer = getattr(self.app, "_data_layer", None)
-        if not data_layer:
+        lid = self._listing.id
+        dl = getattr(self.app, "_data_layer", None)
+        if not dl:
             return
         async def _do() -> None:
-            await data_layer.mark_status(listing_id, status)
+            await dl.mark_status(lid, status)
             await self.app._poll()  # type: ignore[attr-defined]
         self.app.run_worker(_do(), exclusive=False)
 

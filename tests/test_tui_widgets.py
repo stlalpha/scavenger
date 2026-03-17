@@ -1,7 +1,7 @@
 import pytest
 from textual.app import App, ComposeResult
 from scavenger.tui.widgets.profile_sidebar import ProfileSidebar
-from scavenger.tui.widgets.results_feed import ResultsFeed, _card_label
+from scavenger.tui.widgets.results_feed import ResultsFeed, _card
 from scavenger.tui.widgets.detail_panel import DetailPanel
 from scavenger.tui.widgets.status_bar import StatusBar
 from scavenger.models import Profile, Listing
@@ -190,8 +190,8 @@ async def test_status_bar_daemon_unreachable():
     async with app.run_test(size=(120, 5)) as pilot:
         await pilot.pause(0.1)
         bar = app.query_one(StatusBar)
-        bar.set_daemon_status(reachable=False)
-        assert bar.daemon_reachable is False
+        bar.set_daemon_status(False)
+        assert bar.daemon_up is False
 
 
 async def test_status_bar_new_count():
@@ -200,13 +200,13 @@ async def test_status_bar_new_count():
         await pilot.pause(0.1)
         bar = app.query_one(StatusBar)
         bar.set_new_count(7)
-        assert bar.new_today == 7
+        assert bar.new_count == 7
 
 
 # --- Unread indicator tests ---
 
 
-def test_card_label_shows_unread_dot_for_new_listing():
+def test_card_shows_unread_dot_for_new_listing():
     """Listings with status='new' should have an unread indicator in their label."""
     now = datetime.now(timezone.utc)
     listing = Listing(
@@ -215,11 +215,11 @@ def test_card_label_shows_unread_dot_for_new_listing():
         first_seen=now, last_seen=now, relevance_score=80.0,
         price=150.0, status="new",
     )
-    label = _card_label(listing)
+    label = _card(listing)
     assert "●" in label
 
 
-def test_card_label_no_unread_dot_for_seen_listing():
+def test_card_no_unread_dot_for_seen_listing():
     """Listings with status='seen' should NOT have an unread indicator."""
     now = datetime.now(timezone.utc)
     listing = Listing(
@@ -228,11 +228,11 @@ def test_card_label_no_unread_dot_for_seen_listing():
         first_seen=now, last_seen=now, relevance_score=80.0,
         price=150.0, status="seen",
     )
-    label = _card_label(listing)
+    label = _card(listing)
     assert "●" not in label
 
 
-def test_card_label_no_unread_dot_for_saved_listing():
+def test_card_no_unread_dot_for_saved_listing():
     """Listings with status='saved' should NOT have an unread indicator."""
     now = datetime.now(timezone.utc)
     listing = Listing(
@@ -241,11 +241,11 @@ def test_card_label_no_unread_dot_for_saved_listing():
         first_seen=now, last_seen=now, relevance_score=80.0,
         price=150.0, status="saved",
     )
-    label = _card_label(listing)
+    label = _card(listing)
     assert "●" not in label
 
 
-def test_card_label_unread_dot_coexists_with_notable_star():
+def test_card_unread_dot_coexists_with_notable_star():
     """A new listing with a notable AI evaluation should show both ● and ★."""
     now = datetime.now(timezone.utc)
     listing = Listing(
@@ -255,6 +255,6 @@ def test_card_label_unread_dot_coexists_with_notable_star():
         price=300.0, status="new",
         ai_evaluation='{"relevant": true, "reason": "Great", "notable": "Zeiss variant", "escalate": false}',
     )
-    label = _card_label(listing)
+    label = _card(listing)
     assert "●" in label
     assert "★" in label
