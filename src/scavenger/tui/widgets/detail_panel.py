@@ -123,7 +123,7 @@ class DetailPanel(Widget):
         self._thumbnail_cache = ThumbnailCache()
         self._images: list[str] = []
         self._img_idx: int = 0
-        self._fetching_detail: bool = False
+        self._pending_scrape_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("╶ detail", id="detail-hdr")
@@ -169,26 +169,32 @@ class DetailPanel(Widget):
 
         content.update(_render(listing, self._img_idx, len(self._images)))
 
-        # Fetch full gallery from the detail page in background
+        # Fetch full gallery after a debounce — don't scrape while user is arrowing through
         if listing.url and listing.url.startswith("http"):
-            self._fetching_detail = True
-            self.run_worker(self._fetch_detail_images(listing.url, listing.id), exclusive=False, group="detail-images")
+            self._pending_scrape_id = listing.id
+            self.run_worker(self._debounced_fetch(listing.url, listing.id), exclusive=False, group="detail-images")
+
+    async def _debounced_fetch(self, url: str, listing_id: str) -> None:
+        """Wait 1.5s before scraping — if user moved on, abort."""
+        import asyncio
+        await asyncio.sleep(1.5)
+        if self._listing is None or self._listing.id != listing_id:
+            return
+        await self._fetch_detail_images(url, listing_id)
 
     async def _fetch_detail_images(self, url: str, listing_id: str) -> None:
-        """Scrape the listing detail page for all images."""
+        """Fetch the listing page HTML and extract all image URLs."""
         try:
-            from scavenger.plugins.detail_scraper import scrape_detail_images
-            images = await scrape_detail_images(url)
-            # Only update if we're still showing the same listing
+            from scavenger.plugins.images import fetch_listing_images
+            source_id = self._listing.source_id if self._listing else ""
+            images = await fetch_listing_images(url, source_id)
             if self._listing and self._listing.id == listing_id and images:
                 self._images = images
                 self._img_idx = 0
                 await self._load_current_image()
                 self._update_content()
         except Exception as e:
-            logger.debug("Detail image fetch failed: %s", e)
-        finally:
-            self._fetching_detail = False
+            logger.debug("Image fetch failed: %s", e)
 
     def _update_content(self) -> None:
         if self._listing:
