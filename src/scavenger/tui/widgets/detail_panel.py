@@ -94,7 +94,6 @@ class DetailPanel(Widget):
         background: #1e1e1e;
         border-left: solid #333;
     }
-    DetailPanel:focus { border-left: solid #fd971f; }
     DetailPanel #detail-hdr {
         dock: top;
         height: 1;
