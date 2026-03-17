@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OLLAMA_URL = "http://localhost:11434/api/chat"
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
 
 def make_profile() -> Profile:
@@ -35,6 +36,13 @@ def make_listing(**overrides) -> Listing:
 def ollama_response(evaluation: dict) -> httpx.Response:
     return httpx.Response(200, json={
         "message": {"role": "assistant", "content": json.dumps(evaluation)}
+    })
+
+
+def anthropic_response(evaluation: dict) -> httpx.Response:
+    return httpx.Response(200, json={
+        "content": [{"type": "text", "text": json.dumps(evaluation)}],
+        "role": "assistant",
     })
 
 
@@ -105,11 +113,9 @@ async def test_escalation_second_call_fires_when_conditions_met():
     fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
     fixture["escalate"] = True
     escalation_response = {**fixture, "escalate": True}
-    respx.post(OLLAMA_URL).mock(side_effect=[
-        ollama_response(fixture),
-        ollama_response(escalation_response),
-    ])
-    config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0)
+    respx.post(OLLAMA_URL).mock(return_value=ollama_response(fixture))
+    respx.post(ANTHROPIC_URL).mock(return_value=anthropic_response(escalation_response))
+    config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0, anthropic_api_key="test-key")
     ev = AIEvaluator(config)
     await ev.start()
     result = await ev.evaluate(make_profile(), make_listing())
@@ -118,20 +124,19 @@ async def test_escalation_second_call_fires_when_conditions_met():
 
 
 @respx.mock
-async def test_escalation_preserves_filter_reason():
+async def test_escalation_uses_frontier_reason():
     fixture = json.loads((FIXTURES / "ai_evaluation_sony.json").read_text())
     fixture["escalate"] = True
     escalation_response = {"relevant": True, "reason": "Escalation reason", "notable": "Even more notable", "escalate": True}
-    respx.post(OLLAMA_URL).mock(side_effect=[
-        ollama_response(fixture),
-        ollama_response(escalation_response),
-    ])
-    config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0)
+    respx.post(OLLAMA_URL).mock(return_value=ollama_response(fixture))
+    respx.post(ANTHROPIC_URL).mock(return_value=anthropic_response(escalation_response))
+    config = AIConfig(enabled=True, escalation_enabled=True, escalation_min_keyword_score=70.0, anthropic_api_key="test-key")
     ev = AIEvaluator(config)
     await ev.start()
     result = await ev.evaluate(make_profile(), make_listing())
     await ev.stop()
-    assert result.reason == fixture["reason"]
+    assert result.reason == "Escalation reason"
+    assert result.notable == "Even more notable"
     assert result.escalate is True
 
 

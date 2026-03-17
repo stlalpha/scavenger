@@ -43,6 +43,7 @@ class ProfileSidebar(Widget):
         super().__init__()
         self._profiles = profiles
         self._stats: dict[str, int] = {}
+        self._daemon_profiles: set[str] = set()
 
     def compose(self) -> ComposeResult:
         yield Static("PROFILES", id="sidebar-header")
@@ -58,11 +59,20 @@ class ProfileSidebar(Widget):
             f"[dim]{SOURCE_GLYPHS.get(s, s[:2])}[/]"
             for s in profile.sources
         )
-        state = "[dim]off[/] " if not profile.enabled else ""
+        if not profile.enabled:
+            state = "[dim]off[/] "
+        elif self._daemon_profiles and profile.id not in self._daemon_profiles:
+            state = "[yellow]![/] "
+        else:
+            state = ""
         return f"{state}{profile.name}{badge} {sources}"
 
     def update_stats(self, stats: dict[str, int]) -> None:
         self._stats = stats
+        self._refresh_labels()
+
+    def set_daemon_profiles(self, profile_ids: list[str]) -> None:
+        self._daemon_profiles = set(profile_ids)
         self._refresh_labels()
 
     def _refresh_labels(self) -> None:
@@ -74,8 +84,33 @@ class ProfileSidebar(Widget):
             except Exception as e:
                 logger.debug("Could not refresh label for profile %s: %s", profile.id, e)
 
+    async def add_profile(self, profile: Profile) -> None:
+        self._profiles.append(profile)
+        list_view = self.query_one(ListView)
+        await list_view.append(
+            ListItem(Label(self._label(profile)), id=f"profile-{profile.id}")
+        )
+
+    async def rebuild(self, profiles: list[Profile]) -> None:
+        """Replace the profile list entirely."""
+        self._profiles = list(profiles)
+        list_view = self.query_one(ListView)
+        await list_view.clear()
+        for p in self._profiles:
+            await list_view.append(
+                ListItem(Label(self._label(p)), id=f"profile-{p.id}")
+            )
+
     def get_unread(self, profile_id: str) -> int:
         return self._stats.get(profile_id, 0)
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.item is None:
+            return
+        item_id = event.item.id or ""
+        if item_id.startswith("profile-"):
+            profile_id = item_id.removeprefix("profile-")
+            self.post_message(ProfileSelected(profile_id=profile_id))
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id or ""

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from pathlib import Path
 from textual.app import App
 from textual.binding import Binding
 from scavenger.config import AppConfig
@@ -32,13 +33,16 @@ class ScavengerApp(App):
         Binding("s", "save_listing", "Save", show=False),
         Binding("d", "dismiss_listing", "Dismiss", show=False),
         Binding("n", "snooze_listing", "Snooze", show=False),
+        Binding("a", "add_profile", "Add profile", show=False),
+        Binding("e", "edit_profile", "Edit profile", show=False),
         Binding("r", "repoll", "Re-poll", show=False),
         Binding("?", "show_help", "Help", show=False),
     ]
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, config_path: Path | None = None) -> None:
         super().__init__()
         self._config = config
+        self._config_path = config_path
         self._db: Database | None = None
         self._data_layer: DataLayer | None = None
         self._active_profile_id: str | None = (
@@ -73,6 +77,13 @@ class ScavengerApp(App):
                 bar.set_source_states(source_states)
                 if last_source_poll:
                     bar.set_last_poll(last_source_poll)
+            except Exception:
+                pass
+            # Show which profiles the daemon knows about
+            try:
+                from scavenger.tui.widgets.profile_sidebar import ProfileSidebar
+                sidebar = self.screen.query_one(ProfileSidebar)
+                sidebar.set_daemon_profiles(daemon_status.get("profiles", []))
             except Exception:
                 pass
         except Exception as e:
@@ -179,10 +190,116 @@ class ScavengerApp(App):
                 await self._poll()
             self.run_worker(_do(), exclusive=False)
 
+    def action_add_profile(self) -> None:
+        from scavenger.tui.screens.add_profile import ProfileFormScreen
+        self.push_screen(ProfileFormScreen(), callback=self._on_profile_form_result)
+
+    def action_edit_profile(self) -> None:
+        from scavenger.tui.screens.add_profile import ProfileFormScreen
+        profile = next((p for p in self._config.profiles if p.id == self._active_profile_id), None)
+        if not profile:
+            self.notify("No profile selected", severity="warning")
+            return
+        self.push_screen(ProfileFormScreen(profile=profile), callback=self._on_profile_form_result)
+
+    def _on_profile_form_result(self, result: dict | None) -> None:
+        if result is None:
+            return
+        from scavenger.config import append_profile, update_profile, delete_profile, ConfigError
+        from scavenger.tui.widgets.profile_sidebar import ProfileSidebar
+        config_path = self._config_path or Path("~/.config/scavenger/config.toml").expanduser()
+        action = result.pop("_action", "create")
+
+        if action == "delete":
+            try:
+                delete_profile(config_path, result["id"])
+            except ConfigError as e:
+                self.notify(f"Delete failed: {e}", severity="error")
+                return
+            self._config.profiles = [p for p in self._config.profiles if p.id != result["id"]]
+            # Switch away from deleted profile before rebuilding UI
+            if self._active_profile_id == result["id"]:
+                self.set_active_profile(self._config.profiles[0].id if self._config.profiles else None)
+            self._send_daemon_command({"command": "reload"})
+            self.notify(f"Profile '{result['name']}' deleted")
+            # Rebuild sidebar and refresh feed in sequence
+            self.run_worker(self._rebuild_and_poll(), exclusive=True)
+            return
+
+        if action == "update":
+            try:
+                profile = update_profile(config_path, result)
+            except ConfigError as e:
+                self.notify(f"Update failed: {e}", severity="error")
+                return
+            self._config.profiles = [profile if p.id == profile.id else p for p in self._config.profiles]
+            self._send_daemon_command({"command": "reload"})
+            self.notify(f"Profile '{profile.name}' updated")
+            self.run_worker(self._rebuild_and_poll(), exclusive=True)
+            return
+
+        # action == "create"
+        try:
+            profile = append_profile(config_path, result)
+        except ConfigError as e:
+            self.notify(f"Failed: {e}", severity="error")
+            return
+        self._config.profiles.append(profile)
+        try:
+            sidebar = self.screen.query_one(ProfileSidebar)
+            self.run_worker(sidebar.add_profile(profile), exclusive=False)
+        except Exception:
+            pass
+        self._send_daemon_command({"command": "reload"})
+        self.notify(f"Profile '{profile.name}' created — polling started")
+        self.set_active_profile(profile.id)
+        self.run_worker(self._trigger_daemon_poll(), exclusive=True)
+
+    async def _rebuild_and_poll(self) -> None:
+        """Rebuild the sidebar then refresh listings. Runs as a single worker to avoid races."""
+        from scavenger.tui.widgets.profile_sidebar import ProfileSidebar
+        from scavenger.tui.widgets.results_feed import ResultsFeed
+        try:
+            sidebar = self.screen.query_one(ProfileSidebar)
+            await sidebar.rebuild(self._config.profiles)
+        except Exception:
+            pass
+        try:
+            feed = self.screen.query_one(ResultsFeed)
+            feed.invalidate_fingerprint()
+        except Exception:
+            pass
+        await self._poll()
+
+    def _send_daemon_command(self, command: dict) -> dict | None:
+        import json as _json, socket
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(5.0)
+            s.connect(str(self._config.socket_path))
+            s.sendall(_json.dumps(command).encode() + b"\n")
+            data = s.recv(4096)
+            s.close()
+            return _json.loads(data)
+        except Exception:
+            return None
+
     def action_repoll(self) -> None:
-        self.run_worker(self._poll(), exclusive=True)
+        self.run_worker(self._trigger_daemon_poll(), exclusive=True)
+
+    async def _trigger_daemon_poll(self) -> None:
+        """Tell the daemon to poll the active profile, then refresh the TUI."""
+        profile_id = self._active_profile_id
+        if not profile_id:
+            return
+        result = await asyncio.to_thread(
+            self._send_daemon_command, {"command": "poll", "profile_id": profile_id}
+        )
+        if result is None:
+            self.notify("Daemon not reachable", severity="warning")
+        await self._poll()
 
     def action_show_help(self) -> None:
         self.notify(
-            "j/k ↑↓ navigate  o open  s save  d dismiss  n snooze  r repoll  q quit"
+            "j/k ↑↓ navigate  o open  s save  d dismiss  n snooze  a add  r repoll  q quit"
         )

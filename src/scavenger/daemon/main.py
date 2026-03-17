@@ -3,7 +3,7 @@ import logging
 import signal
 from datetime import datetime, timezone
 
-from scavenger.config import AppConfig
+from scavenger.config import AppConfig, load_config
 from scavenger.daemon.scheduler import PollScheduler
 from scavenger.daemon.socket_server import SocketServer
 from scavenger.db import Database
@@ -27,8 +27,9 @@ def _make_plugins(config: AppConfig) -> dict:
 
 
 class Daemon:
-    def __init__(self, config: AppConfig, ai_config: AIConfig | None = None):
+    def __init__(self, config: AppConfig, ai_config: AIConfig | None = None, config_path: str | None = None):
         self._config = config
+        self._config_path = config_path
         self._db = Database(config.db_path)
         self._scheduler = PollScheduler()
         self._socket_server = SocketServer(config.socket_path)
@@ -114,6 +115,7 @@ class Daemon:
         # Register handlers BEFORE starting the socket so no command arrives unhandled
         self._socket_server.register_status_handler(self._handle_status)
         self._socket_server.register_poll_handler(self._handle_poll_command)
+        self._socket_server.register_reload_handler(self._handle_reload)
         self._socket_server.register_shutdown_handler(stop_event.set)
         await self._socket_server.start()
         self._register_profiles()
@@ -126,7 +128,33 @@ class Daemon:
         await self.shutdown()
 
     def _handle_status(self) -> dict:
-        return {"state": "running", "active_polls": sorted(self._active_polls)}
+        return {
+            "state": "running",
+            "active_polls": sorted(self._active_polls),
+            "profiles": [p.id for p in self._config.profiles if p.enabled],
+        }
+
+    async def _handle_reload(self) -> None:
+        """Re-read config and register any new profiles."""
+        if not self._config_path:
+            logger.warning("No config path — cannot reload")
+            return
+        from pathlib import Path
+        try:
+            new_config = load_config(Path(self._config_path))
+        except Exception as e:
+            logger.warning("Reload failed: %s", e)
+            return
+        existing_ids = {p.id for p in self._config.profiles}
+        added = 0
+        for profile in new_config.profiles:
+            if profile.id not in existing_ids and profile.enabled:
+                self._config.profiles.append(profile)
+                self._scheduler.add_profile(profile, callback=self._make_callback(profile))
+                added += 1
+                logger.info("Loaded new profile: %s", profile.name)
+        if added:
+            logger.info("Reload: added %d new profile(s)", added)
 
     async def _handle_poll_command(self, profile_id: str) -> None:
         profile = next((p for p in self._config.profiles if p.id == profile_id), None)

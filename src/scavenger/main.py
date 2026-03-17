@@ -16,4 +16,4 @@ def cli(config_path: str) -> None:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
     from scavenger.tui.app import ScavengerApp
-    ScavengerApp(config=config).run()
+    ScavengerApp(config=config, config_path=Path(config_path)).run()

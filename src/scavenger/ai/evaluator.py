@@ -1,15 +1,33 @@
 import asyncio
 import json as _json
 import logging
+import re
 from dataclasses import dataclass
 import httpx
 from scavenger.ai.models import AIConfig, AIEvaluation
-from scavenger.ai.prompts import build_prompt, build_batch_prompt
+from scavenger.ai.prompts import build_prompt, build_batch_prompt, build_escalation_prompt
 from scavenger.models import Profile, Listing
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 10
+def _strip_fences(text: str) -> str:
+    """Strip markdown code fences from model output."""
+    text = text.strip()
+    if text.startswith("```"):
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1:]
+    if text.rstrip().endswith("```"):
+        text = text.rstrip()
+        text = text[: text.rfind("```")].rstrip()
+    return text.strip()
+
+
+def _match_escalation_keywords(keywords: list[str], title: str, description: str) -> list[str]:
+    """Return which escalation keywords appear in the listing text."""
+    text = f"{title} {description}".lower()
+    return [kw for kw in keywords if re.search(re.escape(kw.lower()), text)]
 
 
 def _ollama_base(config_url: str) -> str:
@@ -78,26 +96,29 @@ class AIEvaluator:
                 self._queue.task_done()
 
     async def evaluate(self, profile: Profile, listing: Listing) -> AIEvaluation:
-        """Single-listing evaluation — bypasses queue, used for escalation calls."""
+        """Single-listing evaluation with optional keyword-triggered escalation."""
         evaluation = await self._call_model(
             profile, listing,
             model=self._config.filter_model,
             timeout=self._config.filter_timeout_sec,
         )
-        if (
-            evaluation.escalate
-            and self._config.escalation_enabled
-            and listing.relevance_score >= self._config.escalation_min_keyword_score
-        ):
-            escalation = await self._call_model(
-                profile, listing,
-                model=self._config.escalation_model,
-                timeout=self._config.escalation_timeout_sec,
+        if not evaluation.relevant:
+            return evaluation
+        # Escalate if cheap model says so OR if escalation keywords match
+        should_escalate = evaluation.escalate
+        matched: list[str] = []
+        if self._config.escalation_enabled and profile.escalation_keywords:
+            matched = _match_escalation_keywords(
+                profile.escalation_keywords, listing.title, listing.description
             )
+            if matched:
+                should_escalate = True
+        if should_escalate and self._config.escalation_enabled:
+            escalation = await self._escalate(profile, listing, matched or ["(model-triggered)"])
             evaluation = AIEvaluation(
                 relevant=evaluation.relevant,
-                reason=evaluation.reason,
-                notable=evaluation.notable or escalation.notable,
+                reason=escalation.reason or evaluation.reason,
+                notable=escalation.notable or evaluation.notable,
                 escalate=escalation.escalate,
             )
         return evaluation
@@ -119,7 +140,71 @@ class AIEvaluator:
         for future in futures:
             chunk_results = await future
             all_results.update(chunk_results)
+
+        # Escalate listings that contain escalation keywords
+        if self._config.escalation_enabled and profile.escalation_keywords:
+            for listing in listings:
+                ev = all_results.get(listing.id)
+                if not ev or not ev.relevant:
+                    continue
+                matched = _match_escalation_keywords(
+                    profile.escalation_keywords, listing.title, listing.description
+                )
+                if matched:
+                    logger.info(
+                        "Escalating %s — matched keywords: %s",
+                        listing.id[:12], ", ".join(matched),
+                    )
+                    escalation = await self._escalate(profile, listing, matched)
+                    all_results[listing.id] = AIEvaluation(
+                        relevant=ev.relevant,
+                        reason=escalation.reason or ev.reason,
+                        notable=escalation.notable or ev.notable,
+                        escalate=escalation.escalate,
+                    )
+
         return all_results
+
+    async def _escalate(
+        self, profile: Profile, listing: Listing, triggered_keywords: list[str]
+    ) -> AIEvaluation:
+        """Send a listing to the frontier model for deeper evaluation."""
+        system_prompt, user_prompt = build_escalation_prompt(
+            profile, listing, triggered_keywords
+        )
+        try:
+            content = await self._call_anthropic(system_prompt, user_prompt)
+            return AIEvaluation.model_validate_json(content)
+        except Exception as e:
+            logger.warning("Escalation failed for %s: %s", listing.id[:12], e)
+            return AIEvaluation.passthrough()
+
+    async def _call_anthropic(
+        self, system_prompt: str, user_prompt: str, temperature: float = 0.1
+    ) -> str:
+        """Call the Anthropic Messages API. Returns the text content."""
+        api_key = self._config.anthropic_api_key
+        if not api_key:
+            raise ValueError("anthropic_api_key not set in [ai] config")
+        async with httpx.AsyncClient(timeout=self._config.escalation_timeout_sec) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": self._config.escalation_model,
+                    "max_tokens": 1024,
+                    "system": system_prompt,
+                    "messages": [{"role": "user", "content": user_prompt}],
+                    "temperature": temperature,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            return _strip_fences(data["content"][0]["text"])
 
     async def _process_batch(
         self, profile: Profile, listings: list[Listing]

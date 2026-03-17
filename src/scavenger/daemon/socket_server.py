@@ -14,6 +14,7 @@ class SocketServer:
         self._server: asyncio.Server | None = None
         self._status_handler: Callable[[], dict] | None = None
         self._poll_handler: PollHandler | None = None
+        self._reload_handler: Callable[[], Awaitable[None]] | None = None
         self._shutdown_handler: Callable[[], None] | None = None
 
     def register_status_handler(self, handler: Callable[[], dict]) -> None:
@@ -21,6 +22,9 @@ class SocketServer:
 
     def register_poll_handler(self, handler: PollHandler) -> None:
         self._poll_handler = handler
+
+    def register_reload_handler(self, handler: Callable[[], Awaitable[None]]) -> None:
+        self._reload_handler = handler
 
     def register_shutdown_handler(self, handler: Callable[[], None]) -> None:
         self._shutdown_handler = handler
@@ -69,6 +73,10 @@ class SocketServer:
             if self._poll_handler:
                 asyncio.create_task(self._poll_handler(profile_id))
             return {"status": "ok", "data": {"profile_id": profile_id}}
+        elif cmd == "reload":
+            if self._reload_handler:
+                await self._reload_handler()
+            return {"status": "ok", "data": {"message": "config reloaded"}}
         elif cmd == "shutdown":
             if self._shutdown_handler:
                 self._shutdown_handler()

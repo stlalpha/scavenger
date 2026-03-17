@@ -119,4 +119,4 @@ def start(ctx):
         click.echo(f"Starting SCAVENGER daemon (AI: {ai_config.filter_model})...")
     else:
         click.echo("Starting SCAVENGER daemon...")
-    asyncio.run(Daemon(config, ai_config=ai_config).run())
+    asyncio.run(Daemon(config, ai_config=ai_config, config_path=str(ctx.obj["config_path"])).run())

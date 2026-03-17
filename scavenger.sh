@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Load .env if present (for API keys etc.)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "${SCRIPT_DIR}/.env" ] && set -a && source "${SCRIPT_DIR}/.env" && set +a
+
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 CHROME_DATA="/tmp/scavenger-chrome"
 CDP_PORT=9222
