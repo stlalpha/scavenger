@@ -217,6 +217,13 @@ class ScavengerApp(App):
                 self.notify(f"Delete failed: {e}", severity="error")
                 return
             self._config.profiles = [p for p in self._config.profiles if p.id != result["id"]]
+            # Delete associated listings from DB
+            if self._data_layer:
+                async def _clean() -> None:
+                    count = await self._data_layer._db.delete_profile_listings(result["id"])
+                    if count:
+                        self.notify(f"Removed {count} listings")
+                self.run_worker(_clean(), exclusive=False)
             # Switch away from deleted profile before rebuilding UI
             if self._active_profile_id == result["id"]:
                 self.set_active_profile(self._config.profiles[0].id if self._config.profiles else None)

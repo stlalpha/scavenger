@@ -183,6 +183,20 @@ class Database:
         )
         await self._conn.commit()
 
+    async def delete_profile_listings(self, profile_id: str) -> int:
+        """Delete all listings and their price history for a profile."""
+        cursor = await self._conn.execute(
+            "DELETE FROM price_history WHERE listing_id IN "
+            "(SELECT id FROM listings WHERE profile_id=?)",
+            (profile_id,),
+        )
+        cursor2 = await self._conn.execute(
+            "DELETE FROM listings WHERE profile_id=?",
+            (profile_id,),
+        )
+        await self._conn.commit()
+        return cursor2.rowcount
+
     async def snooze_listing(self, listing_id: str, until: datetime) -> None:
         """Snooze a listing until the given time."""
         await self._conn.execute(

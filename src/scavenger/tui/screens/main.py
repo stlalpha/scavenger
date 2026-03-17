@@ -60,8 +60,14 @@ class MainScreen(Screen):
 
     def on_profile_selected(self, event: ProfileSelected) -> None:
         self.app.set_active_profile(event.profile_id)  # type: ignore[attr-defined]
-        self.query_one(ResultsFeed).invalidate_fingerprint()
-        self.app.run_worker(self.app._poll(), exclusive=True)  # type: ignore[attr-defined]
+        feed = self.query_one(ResultsFeed)
+        feed.invalidate_fingerprint()
+        self.query_one(DetailPanel).show_listing(None)
+
+        async def _switch() -> None:
+            await feed.update_listings([])
+            await self.app._poll()  # type: ignore[attr-defined]
+        self.app.run_worker(_switch(), exclusive=True)
 
     async def on_data_updated(self, event: DataUpdated) -> None:
         feed = self.query_one(ResultsFeed)

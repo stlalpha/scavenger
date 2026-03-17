@@ -123,13 +123,17 @@ class ResultsFeed(Widget):
             await list_view.append(ListItem(Label(_card_label(listing))))
         self.cursor = min(self.cursor, max(0, len(listings) - 1))
         self._update_cursor()
+        if not listings:
+            await list_view.append(ListItem(Label("[dim]Waiting for results...[/]")))
         # Update header with count
         header = self.query_one("#feed-header", Static)
         new_count = sum(1 for l in listings if l.status == "new")
         if new_count > 0:
             header.update(f"LISTINGS [bold cyan]{new_count} new[/]")
-        else:
+        elif listings:
             header.update(f"LISTINGS [dim]{len(listings)}[/]")
+        else:
+            header.update("LISTINGS [dim yellow]polling...[/]")
 
     def has_notable(self, listing_id: str) -> bool:
         return any(_has_notable(l) for l in self._listings if l.id == listing_id)
