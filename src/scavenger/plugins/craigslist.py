@@ -83,7 +83,7 @@ class CraigslistPlugin:
     async def _fetch_city(self, city: str, keywords: str, profile: Profile) -> list[Listing]:
         page = await new_page()
         try:
-            url = f"https://{city}.craigslist.org/search/sss?query={keywords.replace(' ', '+')}&sort=date"
+            url = f"https://{city}.craigslist.org/search/sss?query={keywords.replace(' ', '+')}&sort=date&hasPic=1"
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
             # Craigslist has two result formats depending on the city/view
