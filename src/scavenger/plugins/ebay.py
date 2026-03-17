@@ -49,6 +49,8 @@ class EbayPlugin:
         )
         try:
             return await self._scrape(keywords, profile)
+        except BotDetectedError:
+            raise
         except Exception as e:
             logger.warning("eBay fetch failed: %s", e)
             return []

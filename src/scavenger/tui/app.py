@@ -324,17 +324,47 @@ class ScavengerApp(App):
         await self._poll()
 
     def action_fix_block(self) -> None:
-        """Open blocked marketplace URL in visible Chrome for manual verification."""
+        """Switch to visible Chrome so user can solve CAPTCHAs / log in."""
         daemon_status = self._check_daemon()
         bot_blocks = daemon_status.get("bot_blocks", {})
         if not bot_blocks:
             self.notify("No blocked sources")
             return
-        import subprocess, sys
-        opener = "open" if sys.platform == "darwin" else "xdg-open"
-        for plugin_id, url in bot_blocks.items():
-            subprocess.Popen([opener, url])
-            self.notify(f"Opened {plugin_id.upper()} — complete verification, then press 'r' to re-poll")
+        urls = list(bot_blocks.values())
+        sources = ", ".join(s.upper() for s in bot_blocks)
+        self.notify(f"Opening {sources} in Chrome — solve CAPTCHAs, then press Enter here")
+        self.run_worker(self._fix_blocks(urls), exclusive=True)
+
+    async def _fix_blocks(self, urls: list[str]) -> None:
+        """Stop headless Chrome, start visible, open blocked URLs, wait, restart headless."""
+        import subprocess
+        CDP_PORT = 9222
+        CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        CHROME_DATA = "/tmp/scavenger-chrome"
+
+        # Kill headless Chrome
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["pkill", "-f", f"remote-debugging-port={CDP_PORT}"],
+            capture_output=True,
+        )
+        await asyncio.sleep(1)
+
+        # Start visible Chrome with same data dir
+        proc = await asyncio.create_subprocess_exec(
+            CHROME,
+            f"--remote-debugging-port={CDP_PORT}",
+            f"--user-data-dir={CHROME_DATA}",
+            "--no-first-run", "--disable-default-apps",
+            *urls,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        self.notify("Chrome opened — solve CAPTCHAs / log in, then come back and press 'r'")
+
+        # Wait for user to press r (don't block forever — they'll re-poll manually)
+        # Just leave Chrome visible; the next 'r' press will re-poll through visible Chrome
+        # which will work. The daemon restart or next scavenger.sh start will go back to headless.
         self._notified_blocks.clear()
 
     def action_show_help(self) -> None:

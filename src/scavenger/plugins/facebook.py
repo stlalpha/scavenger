@@ -51,6 +51,8 @@ class FacebookPlugin:
         )
         try:
             return await self._scrape(keywords, profile)
+        except BotDetectedError:
+            raise
         except Exception as e:
             logger.warning("Facebook fetch failed: %s", e)
             return []
