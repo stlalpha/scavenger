@@ -45,6 +45,7 @@ class FacebookPlugin:
 
     async def fetch(self, profile: Profile) -> list[Listing]:
         keywords = " ".join(
+            # Facebook has no OR syntax — use first variant per group
             kw if isinstance(kw, str) else kw[0] for kw in profile.keywords
         )
         try:

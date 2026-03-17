@@ -40,8 +40,11 @@ class EbayPlugin:
     plugin_id = "ebay"
 
     async def fetch(self, profile: Profile) -> list[Listing]:
+        # eBay supports OR with (a,b,c) syntax
         keywords = " ".join(
-            kw if isinstance(kw, str) else kw[0] for kw in profile.keywords
+            kw if isinstance(kw, str)
+            else f"({','.join(kw)})" if len(kw) > 1 else kw[0]
+            for kw in profile.keywords
         )
         try:
             return await self._scrape(keywords, profile)
