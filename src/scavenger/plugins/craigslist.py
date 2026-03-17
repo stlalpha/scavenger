@@ -36,7 +36,7 @@ class CraigslistPlugin:
 
     async def fetch(self, profile: Profile) -> list[Listing]:
         keywords = " ".join(
-            kw if isinstance(kw, str) else " ".join(kw) for kw in profile.keywords
+            kw if isinstance(kw, str) else kw[0] for kw in profile.keywords
         )
         cities = await self._get_cities()
         results = await asyncio.gather(
