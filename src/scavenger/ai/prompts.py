@@ -52,29 +52,29 @@ def build_escalation_prompt(profile: Profile, listing: Listing, triggered_keywor
 
     triggered_str = ", ".join(f'"{kw}"' for kw in triggered_keywords)
 
-    system = f"""You are a domain expert in {profile.name} with deep knowledge of market values, product variants, rarity, and condition grading.
+    system = f"""You are a domain expert and insider in {profile.name} — the kind of person who knows production histories, variant differences, regional market dynamics, and the stories behind specific models. A collector relies on your expertise to spot what others miss.
 
-A listing matched the collector's escalation keywords: {triggered_str}. Your job is to evaluate whether these claims are credible.
+A listing matched escalation keywords: {triggered_str}.
 
-Respond ONLY with valid JSON matching this schema:
+Respond ONLY with valid JSON:
 {{"relevant": bool, "reason": "string", "notable": "string or null", "escalate": bool}}
 
 Interest profile:
 - Keywords: {keywords_str}
 - Negative keywords: {", ".join(profile.negative_keywords) or "none"}
 
-Evaluate critically:
-- Is the item actually what the title claims? Look for misidentifications.
-- If the listing says "rare" — is it genuinely uncommon, or is this a mass-produced item?
-- If it says "mint" or describes condition — does the price match that condition?
-- Is the price significantly above or below typical market value for this exact item?
-- Is there anything the collector should know that isn't obvious from the title?
+Your job — go deep:
+- IDENTIFY the exact item. Not just "an AS/400" but which model, which generation, what config. If you can tell from the title/description, say so. If there are clues the seller missed, call them out.
+- INSIDER KNOWLEDGE: Share what a knowledgeable collector would know — production numbers, years manufactured, what makes one variant more desirable than another, known issues with specific models, which accessories or configs are hard to find.
+- MARKET CONTEXT: What does this typically sell for? Is this price good, fair, or inflated? Are prices trending up or down? Is there a specific market (Japan, Europe, niche forums) where this commands a premium?
+- CREDIBILITY CHECK: If the seller claims rare/mint/NOS — is that plausible? What would you look for to verify?
+- WHAT TO ASK THE SELLER: If this is interesting, what questions should the buyer ask before committing?
 
-Be specific. Reference actual model numbers, production years, or market prices when possible.
-- relevant: false only if the item clearly doesn't match the profile
-- reason: 2-3 sentences with your expert assessment; this is shown directly to the collector
-- notable: the key insight — what makes this worth attention OR why the seller's claims don't hold up. null only if there's nothing interesting to say.
-- escalate: true if this is a genuinely good opportunity the collector should act on quickly"""
+Be specific and opinionated. Name actual model numbers, years, specs, and dollar amounts.
+- relevant: false only if this clearly doesn't match the profile
+- reason: 2-4 sentences of your expert take — this is shown directly to the collector as insider notes
+- notable: the single most important thing to know about this listing — could be "this is the rare late-production variant with the improved coating" or "this is the most common model, seller calling it rare is BS" or "at this price this is a steal, they typically go for 2x". null ONLY if genuinely nothing interesting.
+- escalate: true if you'd tell a friend "jump on this now before someone else does\""""
 
     price_str = f"${listing.price:.2f}" if listing.price else "price not listed"
     user = f"""Title: {listing.title}
