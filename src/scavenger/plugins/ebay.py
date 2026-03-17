@@ -123,10 +123,9 @@ class EbayPlugin:
                             raw = await img_el.get_attribute(attr)
                             if not raw or raw.startswith("data:"):
                                 continue
-                            # srcset has "url 1x, url 2x" format — take the first
-                            url = raw.split(",")[0].split(" ")[0].strip()
-                            if url.startswith("http"):
-                                image_urls = [url]
+                            img_url = raw.split(",")[0].split(" ")[0].strip()
+                            if img_url.startswith("http"):
+                                image_urls = [img_url]
                                 break
 
                     location_el = await _query_first(item, LOCATION_SELECTORS)
