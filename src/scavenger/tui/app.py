@@ -63,11 +63,14 @@ class ScavengerApp(App):
             # Post to the current screen, not the app — messages don't bubble down
             self.screen.post_message(DataUpdated(listings=listings, profile_stats=stats))
             # Check daemon socket (in thread to avoid blocking event loop)
-            daemon_up = await asyncio.to_thread(self._check_daemon)
+            daemon_status = await asyncio.to_thread(self._check_daemon)
             last_source_poll = await self._data_layer.get_last_source_poll()
+            source_states = await self._data_layer.get_source_states()
             try:
-                bar = self.query_one(StatusBar)
-                bar.set_daemon_status(daemon_up)
+                bar = self.screen.query_one(StatusBar)
+                bar.set_daemon_status(daemon_status["up"])
+                bar.set_active_polls(daemon_status["active_polls"])
+                bar.set_source_states(source_states)
                 if last_source_poll:
                     bar.set_last_poll(last_source_poll)
             except Exception:
@@ -75,16 +78,30 @@ class ScavengerApp(App):
         except Exception as e:
             logger.warning("Poll error: %s", e)
 
-    def _check_daemon(self) -> bool:
-        import socket as _socket
+    def _check_daemon(self) -> dict:
+        """Query daemon status. Returns {"up": bool, "active_polls": list[str]}."""
+        import socket as _socket, json
         try:
             s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-            s.settimeout(0.5)
+            s.settimeout(1.0)
             s.connect(str(self._config.socket_path))
+            s.sendall(json.dumps({"command": "status"}).encode() + b"\n")
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
             s.close()
-            return True
+            resp = json.loads(data)
+            if resp.get("status") == "ok":
+                return {
+                    "up": True,
+                    "active_polls": resp.get("data", {}).get("active_polls", []),
+                }
         except Exception:
-            return False
+            pass
+        return {"up": False, "active_polls": []}
 
     async def on_load(self) -> None:
         self._db = Database(self._config.db_path)

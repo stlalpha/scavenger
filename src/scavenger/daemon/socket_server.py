@@ -12,8 +12,12 @@ class SocketServer:
     def __init__(self, socket_path: Path):
         self._path = socket_path
         self._server: asyncio.Server | None = None
+        self._status_handler: Callable[[], dict] | None = None
         self._poll_handler: PollHandler | None = None
         self._shutdown_handler: Callable[[], None] | None = None
+
+    def register_status_handler(self, handler: Callable[[], dict]) -> None:
+        self._status_handler = handler
 
     def register_poll_handler(self, handler: PollHandler) -> None:
         self._poll_handler = handler
@@ -56,7 +60,8 @@ class SocketServer:
     async def _dispatch(self, request: dict) -> dict:
         cmd = request.get("command")
         if cmd == "status":
-            return {"status": "ok", "data": {"state": "running"}}
+            data = self._status_handler() if self._status_handler else {"state": "running"}
+            return {"status": "ok", "data": data}
         elif cmd == "poll":
             profile_id = request.get("profile_id")
             if not profile_id:

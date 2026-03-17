@@ -34,6 +34,7 @@ class Daemon:
         self._socket_server = SocketServer(config.socket_path)
         self._plugins = _make_plugins(config)
         self._evaluator = AIEvaluator(ai_config) if (ai_config and ai_config.enabled) else NoopEvaluator()
+        self._active_polls: set[str] = set()  # source_ids currently being polled
 
     def _register_profiles(self) -> None:
         for profile in self._config.profiles:
@@ -52,6 +53,7 @@ class Daemon:
             if plugin is None:
                 logger.warning("Unknown plugin: %s", source_id)
                 continue
+            self._active_polls.add(source_id)
             try:
                 fetched = await plugin.fetch(profile)
                 # Skip known listings, score the rest
@@ -90,6 +92,8 @@ class Daemon:
                     last_polled=existing_last_polled,
                     consecutive_errors=current_errors + 1,
                 )
+            finally:
+                self._active_polls.discard(source_id)
         return new_listings
 
     async def run(self) -> None:
@@ -108,6 +112,7 @@ class Daemon:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, stop_event.set)
         # Register handlers BEFORE starting the socket so no command arrives unhandled
+        self._socket_server.register_status_handler(self._handle_status)
         self._socket_server.register_poll_handler(self._handle_poll_command)
         self._socket_server.register_shutdown_handler(stop_event.set)
         await self._socket_server.start()
@@ -119,6 +124,9 @@ class Daemon:
         )
         await stop_event.wait()
         await self.shutdown()
+
+    def _handle_status(self) -> dict:
+        return {"state": "running", "active_polls": sorted(self._active_polls)}
 
     async def _handle_poll_command(self, profile_id: str) -> None:
         profile = next((p for p in self._config.profiles if p.id == profile_id), None)

@@ -223,6 +223,13 @@ class Database:
         )
         return {row[0]: row[1] for row in await cursor.fetchall()}
 
+    async def get_all_source_states(self) -> list[dict]:
+        """Return all source states with plugin_id, last_polled, consecutive_errors."""
+        cursor = await self._conn.execute(
+            "SELECT plugin_id, last_polled, consecutive_errors FROM sources"
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
     async def get_most_recent_poll(self) -> datetime | None:
         """Return the most recent last_polled timestamp across all sources."""
         cursor = await self._conn.execute(

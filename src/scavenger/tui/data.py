@@ -36,3 +36,7 @@ class DataLayer:
     async def get_last_source_poll(self) -> datetime | None:
         """Return the most recent last_polled timestamp across all sources."""
         return await self._db.get_most_recent_poll()
+
+    async def get_source_states(self) -> list[dict]:
+        """Return per-source poll state."""
+        return await self._db.get_all_source_states()
