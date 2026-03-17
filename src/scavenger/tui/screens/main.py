@@ -20,7 +20,6 @@ class MainScreen(Screen):
         height: 1fr;
     }
 
-    /* Left side: profiles + listings on top, log on bottom */
     #left-side {
         width: 1fr;
         min-width: 50;
@@ -30,26 +29,21 @@ class MainScreen(Screen):
     }
     #left-top ProfileSidebar {
         width: 1fr;
-        min-width: 20;
-        max-width: 30;
+        min-width: 18;
+        max-width: 28;
         border-right: vkey $panel-darken-2;
     }
     #left-top ResultsFeed {
         width: 2fr;
         min-width: 30;
     }
-
-    /* Log panel fills bottom of left side */
     #left-side LogPanel {
         height: 1fr;
-        border-top: hkey $panel-darken-2;
     }
 
-    /* Right side: detail panel */
     MainScreen DetailPanel {
         width: 1fr;
         min-width: 40;
-        border-left: vkey $panel-darken-2;
     }
     """
 

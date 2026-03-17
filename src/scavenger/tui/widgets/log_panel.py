@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import Static, TextArea
+from textual.widgets import Static, RichLog
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +12,7 @@ MAX_LINES = 500
 
 
 class LogPanel(Widget):
-    """Tails the daemon log file into a selectable, scrolling panel."""
+    """Tails the daemon log file with color-coded output."""
 
     can_focus = True
 
@@ -21,18 +21,21 @@ class LogPanel(Widget):
         width: 100%;
         height: 100%;
         background: $surface;
+        border-top: hkey $panel-darken-2;
     }
     LogPanel #log-header {
         dock: top;
-        height: 3;
-        padding: 1 1 0 1;
+        height: 1;
+        padding: 0 1;
         color: $text-muted;
         text-style: bold;
-        background: $surface;
+        background: $panel;
     }
-    LogPanel TextArea {
+    LogPanel RichLog {
         height: 1fr;
+        padding: 0 1;
         background: $surface;
+        scrollbar-size: 1 1;
     }
     """
 
@@ -41,15 +44,12 @@ class LogPanel(Widget):
         self._log_path = log_path
         self._tail_task: asyncio.Task | None = None
         self._last_size: int = 0
-        self._auto_scroll: bool = True
 
     def compose(self) -> ComposeResult:
-        yield Static("LOG", id="log-header")
-        yield TextArea("", read_only=True, show_line_numbers=False, id="log-output")
+        yield Static(" LOG", id="log-header")
+        yield RichLog(highlight=False, markup=True, wrap=True, max_lines=MAX_LINES, id="log-output")
 
     def on_mount(self) -> None:
-        ta = self.query_one("#log-output", TextArea)
-        ta.theme = "monokai"
         self._tail_task = asyncio.create_task(self._tail())
 
     def on_unmount(self) -> None:
@@ -57,23 +57,20 @@ class LogPanel(Widget):
             self._tail_task.cancel()
 
     async def _tail(self) -> None:
-        """Poll the log file for new content."""
-        ta = self.query_one("#log-output", TextArea)
+        log = self.query_one("#log-output", RichLog)
 
-        # Load last 50 lines on startup
         if self._log_path.exists():
             try:
                 text = self._log_path.read_text()
                 self._last_size = len(text.encode())
                 lines = text.strip().split("\n")
-                initial = "\n".join(lines[-50:])
-                ta.load_text(initial)
-                self._scroll_to_end(ta)
+                for line in lines[-40:]:
+                    log.write(self._colorize(line))
             except Exception:
                 pass
 
         while True:
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.8)
             try:
                 if not self._log_path.exists():
                     continue
@@ -86,27 +83,41 @@ class LogPanel(Widget):
                     f.seek(self._last_size)
                     new_data = f.read()
                     self._last_size = f.tell()
-                new_lines = new_data.decode(errors="replace").rstrip("\n")
-                if new_lines:
-                    # Append to end
-                    end = ta.document.end
-                    ta.insert(f"\n{new_lines}", location=end)
-                    # Trim if too long
-                    line_count = ta.document.line_count
-                    if line_count > MAX_LINES:
-                        trim = line_count - MAX_LINES
-                        ta.delete(
-                            (0, 0),
-                            (trim, 0),
-                        )
-                    if self._auto_scroll:
-                        self._scroll_to_end(ta)
+                for line in new_data.decode(errors="replace").strip().split("\n"):
+                    if line.strip():
+                        log.write(self._colorize(line))
             except asyncio.CancelledError:
                 return
             except Exception as e:
                 logger.debug("Log tail error: %s", e)
 
     @staticmethod
-    def _scroll_to_end(ta: TextArea) -> None:
-        end = ta.document.end
-        ta.move_cursor(end)
+    def _colorize(line: str) -> str:
+        # Escape Rich markup in the raw log line
+        safe = line.replace("[", "\\[")
+
+        if " ERROR " in line:
+            return f"[bold red]{safe}[/]"
+        if " WARNING " in line:
+            if "bot" in line.lower() or "Bot block" in line:
+                return f"[bold yellow on dark_red] {safe} [/]"
+            return f"[yellow]{safe}[/]"
+        if " INFO " in line:
+            if "Escalating" in line:
+                return f"[bold magenta]  {safe}[/]"
+            if "found" in line and "listings" in line:
+                return f"[green]{safe}[/]"
+            if "filter call:" in line or "frontier call:" in line:
+                return f"[cyan]{safe}[/]"
+            if "filter response:" in line or "frontier response:" in line:
+                return f"[bold cyan]{safe}[/]"
+            if "Loaded new profile" in line or "Reload:" in line:
+                return f"[bold green]{safe}[/]"
+            if "Daemon started" in line or "Connected to Chrome" in line:
+                return f"[bold]{safe}[/]"
+            if "executed successfully" in line:
+                return f"[dim green]{safe}[/]"
+            return f"[dim]{safe}[/]"
+        if "DeprecationWarning" in line or "node --trace" in line:
+            return ""  # suppress node noise
+        return f"[dim]{safe}[/]"

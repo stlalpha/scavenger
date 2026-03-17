@@ -7,7 +7,8 @@ from scavenger.tui.messages import ProfileSelected
 
 logger = logging.getLogger(__name__)
 
-SOURCE_GLYPHS = {"ebay": "eb", "craigslist": "cl", "facebook": "fb"}
+SOURCE_GLYPHS = {"ebay": "EB", "craigslist": "CL", "facebook": "FB"}
+SOURCE_COLORS = {"ebay": "yellow", "craigslist": "magenta", "facebook": "blue"}
 
 
 class ProfileSidebar(Widget):
@@ -19,16 +20,16 @@ class ProfileSidebar(Widget):
     }
     ProfileSidebar #sidebar-header {
         dock: top;
-        height: 3;
-        padding: 1 1 0 1;
+        height: 1;
+        padding: 0 1;
         color: $text-muted;
         text-style: bold;
-        background: $surface;
+        background: $panel;
     }
     ProfileSidebar ListView {
         height: 1fr;
         background: transparent;
-        padding: 0 1;
+        padding: 0;
     }
     ProfileSidebar ListView > ListItem {
         padding: 0 1;
@@ -46,7 +47,7 @@ class ProfileSidebar(Widget):
         self._daemon_profiles: set[str] = set()
 
     def compose(self) -> ComposeResult:
-        yield Static("PROFILES", id="sidebar-header")
+        yield Static(" PROFILES", id="sidebar-header")
         yield ListView(*[
             ListItem(Label(self._label(p)), id=f"profile-{p.id}")
             for p in self._profiles
@@ -54,18 +55,18 @@ class ProfileSidebar(Widget):
 
     def _label(self, profile: Profile) -> str:
         count = self._stats.get(profile.id, 0)
-        badge = f" [bold cyan]({count})[/]" if count > 0 else ""
-        sources = " ".join(
-            f"[dim]{SOURCE_GLYPHS.get(s, s[:2])}[/]"
+        badge = f" [bold cyan]{count}[/]" if count > 0 else ""
+        sources = "".join(
+            f"[{SOURCE_COLORS.get(s, 'white')} dim]{SOURCE_GLYPHS.get(s, s[:2])}[/]"
             for s in profile.sources
         )
         if not profile.enabled:
-            state = "[dim]off[/] "
+            indicator = "[dim]  [/]"
         elif self._daemon_profiles and profile.id not in self._daemon_profiles:
-            state = "[yellow]![/] "
+            indicator = "[yellow]![/] "
         else:
-            state = ""
-        return f"{state}{profile.name}{badge} {sources}"
+            indicator = "[green]>[/] " if count > 0 else "  "
+        return f"{indicator}{profile.name}{badge} [dim]{sources}[/]"
 
     def update_stats(self, stats: dict[str, int]) -> None:
         self._stats = stats
@@ -92,7 +93,6 @@ class ProfileSidebar(Widget):
         )
 
     async def rebuild(self, profiles: list[Profile]) -> None:
-        """Replace the profile list entirely."""
         self._profiles = list(profiles)
         list_view = self.query_one(ListView)
         await list_view.clear()

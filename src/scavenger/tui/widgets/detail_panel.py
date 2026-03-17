@@ -31,26 +31,22 @@ STATUS_LABELS = {
 
 
 def _render_listing(listing: Listing) -> str:
-    """Build Rich-formatted detail text for a listing."""
     src_color = SOURCE_COLORS.get(listing.source_id, "white")
     source = f"[{src_color} bold]{listing.source_id.upper()}[/]"
     status = STATUS_LABELS.get(listing.status, listing.status)
     price = f"[bold]${listing.price:,.2f}[/]" if listing.price else "[dim]no price[/]"
 
-    # Title block
     lines = [
         f"[bold]{listing.title}[/]",
-        f"{price}  {source}  {status}",
+        "",
+        f"  {price}  {source}  {status}",
     ]
 
-    # Location
     if listing.location:
-        lines.append(f"[dim]{listing.location}[/]")
+        lines.append(f"  [dim]{listing.location}[/]")
 
     lines.append("")
-
-    # URL
-    lines.append(f"[dim underline]{listing.url}[/]")
+    lines.append(f"  [dim underline]{listing.url}[/]")
 
     # AI evaluation
     if listing.ai_evaluation:
@@ -58,26 +54,24 @@ def _render_listing(listing: Listing) -> str:
             ev = json.loads(listing.ai_evaluation)
             if ev.get("notable") or ev.get("reason"):
                 lines.append("")
-                lines.append("[bold magenta]AI NOTES[/]")
+                lines.append("[bold magenta]── AI INSIGHT ──[/]")
                 if ev.get("notable"):
-                    lines.append(f"  [magenta]★[/] {ev['notable']}")
+                    lines.append(f"[magenta]★[/] {ev['notable']}")
                 if ev.get("reason"):
-                    lines.append(f"  {ev['reason']}")
+                    lines.append(f"[dim]{ev['reason']}[/]")
         except Exception:
             pass
 
-    # Description
     if listing.description:
         lines.append("")
         lines.append(listing.description)
 
-    # Key hints
     lines.append("")
     lines.append(
-        "[dim]\\[o][/] open  "
-        "[dim]\\[s][/] save  "
-        "[dim]\\[d][/] dismiss  "
-        "[dim]\\[n][/] snooze"
+        "[dim]\\[o][/][bold] open[/]  "
+        "[dim]\\[s][/][bold] save[/]  "
+        "[dim]\\[d][/][bold] dismiss[/]  "
+        "[dim]\\[n][/][bold] snooze[/]"
     )
 
     return "\n".join(lines)
@@ -103,13 +97,13 @@ class DetailPanel(Widget):
     DetailPanel:focus { border-left: tall $accent; }
     DetailPanel #detail-header {
         dock: top;
-        height: 3;
-        padding: 1 1 0 1;
+        height: 1;
+        padding: 0 1;
         color: $text-muted;
         text-style: bold;
-        background: $surface;
+        background: $panel;
     }
-    DetailPanel VerticalScroll { height: 1fr; padding: 0 2; }
+    DetailPanel VerticalScroll { height: 1fr; padding: 0 1; }
     DetailPanel #hero-image { height: 15; width: auto; }
     DetailPanel #detail-content { width: 100%; padding: 1 0; }
     """
@@ -120,11 +114,11 @@ class DetailPanel(Widget):
         self._thumbnail_cache = ThumbnailCache()
 
     def compose(self) -> ComposeResult:
-        yield Static("DETAIL", id="detail-header")
+        yield Static(" DETAIL", id="detail-header")
         with VerticalScroll():
             if HAS_IMAGE_WIDGET:
                 yield KittyImage("", id="hero-image")
-            yield Static("[dim]Select a listing[/]", id="detail-content")
+            yield Static("[dim italic]  Select a listing[/]", id="detail-content")
 
     @property
     def current_listing(self) -> Listing | None:
@@ -145,11 +139,12 @@ class DetailPanel(Widget):
         content = self.query_one("#detail-content", Static)
         header = self.query_one("#detail-header", Static)
         if listing is None:
-            content.update("[dim]Select a listing[/]")
-            header.update("DETAIL")
+            content.update("[dim italic]  Select a listing[/]")
+            header.update(" DETAIL")
             self._clear_image()
             return
-        header.update(f"DETAIL  [dim]{listing.source_id.upper()}[/]")
+        src_color = SOURCE_COLORS.get(listing.source_id, "white")
+        header.update(f" DETAIL  [{src_color}]{listing.source_id.upper()}[/]")
         content.update(_render_listing(listing))
         if listing.image_urls:
             self.run_worker(self._load_image(listing.image_urls[0]), exclusive=True)

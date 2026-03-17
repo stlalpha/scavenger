@@ -10,15 +10,14 @@ SOURCE_COLORS = {"ebay": "yellow", "craigslist": "magenta", "facebook": "blue"}
 
 def _format_age(delta_sec: int) -> str:
     if delta_sec < 60:
-        return f"{delta_sec}s ago"
+        return f"{delta_sec}s"
     if delta_sec < 3600:
-        return f"{delta_sec // 60}m ago"
-    return f"{delta_sec // 3600}h ago"
+        return f"{delta_sec // 60}m"
+    return f"{delta_sec // 3600}h"
 
 
 def _format_time(dt: datetime) -> str:
-    local = dt.astimezone()
-    return local.strftime("%H:%M:%S")
+    return dt.astimezone().strftime("%H:%M")
 
 
 class StatusBar(Widget):
@@ -29,6 +28,7 @@ class StatusBar(Widget):
         max-height: 1;
         overflow: hidden;
         background: $panel;
+        color: $text;
         padding: 0 1;
     }
     StatusBar #status-left { dock: left; width: auto; max-height: 1; overflow: hidden; }
@@ -66,28 +66,24 @@ class StatusBar(Widget):
     def _left(self) -> str:
         parts = []
 
-        # Daemon indicator
         if self.daemon_reachable:
-            parts.append("[green]●[/] daemon")
+            parts.append("[green]●[/]")
         else:
-            parts.append("[red]●[/] daemon [red]down[/]")
+            parts.append("[red]● down[/]")
 
-        # Polling activity — driven by daemon's active_polls
         if self._active_polls:
             frame = SPINNER[self._spinner_idx % len(SPINNER)]
-            polling_sources = " ".join(
+            srcs = " ".join(
                 f"[{SOURCE_COLORS.get(s, 'white')} bold]{s[:2].upper()}[/]"
                 for s in self._active_polls
             )
-            parts.append(f"[bold yellow]{frame}[/] polling {polling_sources}")
+            parts.append(f"[bold yellow]{frame}[/] {srcs}")
 
-        # Per-source last poll times
         if self._source_states:
             src_parts = []
             now = datetime.now(timezone.utc)
             for src in self._source_states:
                 pid = src["plugin_id"]
-                # Skip sources shown in active polls
                 if pid in self._active_polls:
                     continue
                 color = SOURCE_COLORS.get(pid, "white")
@@ -104,20 +100,23 @@ class StatusBar(Widget):
             if src_parts:
                 parts.append(" ".join(src_parts))
 
-        # New count
         if self.new_today > 0:
             parts.append(f"[bold cyan]{self.new_today}[/] new")
-        else:
-            parts.append("[dim]0 new[/]")
 
-        # Last poll timestamp
         if self._last_poll_ts:
-            parts.append(f"[dim]last: {_format_time(self._last_poll_ts)}[/]")
+            parts.append(f"[dim]{_format_time(self._last_poll_ts)}[/]")
 
-        return " " + "  ".join(parts)
+        return " " + " · ".join(parts)
 
     def _right(self) -> str:
-        return "[dim]\\[?] help  \\[q] quit  \\[Q] quit+stop [/]"
+        return (
+            "[dim]\\[a][/]dd "
+            "[dim]\\[e][/]dit "
+            "[dim]\\[r][/]epoll "
+            "[dim]\\[x][/]fix "
+            "[dim]\\[?][/]help "
+            "[dim]\\[q][/]uit"
+        )
 
     def _refresh(self) -> None:
         try:

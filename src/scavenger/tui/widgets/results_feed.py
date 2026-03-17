@@ -10,9 +10,9 @@ from scavenger.tui.messages import ListingSelected, ListingOpened
 SOURCE_COLORS = {"ebay": "yellow", "craigslist": "magenta", "facebook": "blue"}
 STATUS_ICONS = {
     "new": "[bold cyan]●[/]",
-    "seen": "[dim]○[/]",
+    "seen": "[dim]·[/]",
     "saved": "[bold green]★[/]",
-    "dismissed": "[dim strike]✕[/]",
+    "dismissed": "[dim]✕[/]",
     "snoozed": "[dim yellow]◑[/]",
 }
 
@@ -42,13 +42,13 @@ def _has_notable(listing: Listing) -> bool:
 
 def _card_label(listing: Listing) -> str:
     icon = STATUS_ICONS.get(listing.status, " ")
-    notable = " [bold magenta]★[/]" if _has_notable(listing) else ""
+    notable = " [magenta]★[/]" if _has_notable(listing) else ""
     price = f"[bold]${listing.price:,.0f}[/]" if listing.price else "[dim]—[/]"
     src_color = SOURCE_COLORS.get(listing.source_id, "white")
     source = f"[{src_color}]{listing.source_id[:2].upper()}[/]"
     age = f"[dim]{_age(listing.first_seen)}[/]"
     title = listing.title
-    return f"{icon}{notable} {title}\n   {price}  {source}  {age}"
+    return f"{icon}{notable} {title}\n  {price} {source} {age}"
 
 
 class ResultsFeed(Widget):
@@ -68,11 +68,11 @@ class ResultsFeed(Widget):
     }
     ResultsFeed #feed-header {
         dock: top;
-        height: 3;
-        padding: 1 1 0 2;
+        height: 1;
+        padding: 0 1;
         color: $text-muted;
         text-style: bold;
-        background: $surface;
+        background: $panel;
     }
     ResultsFeed ListView {
         height: 1fr;
@@ -95,7 +95,7 @@ class ResultsFeed(Widget):
         self._listing_fingerprint: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Static("LISTINGS", id="feed-header")
+        yield Static(" LISTINGS", id="feed-header")
         yield ListView()
 
     @property
@@ -124,16 +124,15 @@ class ResultsFeed(Widget):
         self.cursor = min(self.cursor, max(0, len(listings) - 1))
         self._update_cursor()
         if not listings:
-            await list_view.append(ListItem(Label("[dim]Waiting for results...[/]")))
-        # Update header with count
+            await list_view.append(ListItem(Label("[dim italic]  Waiting for results...[/]")))
         header = self.query_one("#feed-header", Static)
         new_count = sum(1 for l in listings if l.status == "new")
         if new_count > 0:
-            header.update(f"LISTINGS [bold cyan]{new_count} new[/]")
+            header.update(f" LISTINGS [bold cyan]{new_count} new[/]")
         elif listings:
-            header.update(f"LISTINGS [dim]{len(listings)}[/]")
+            header.update(f" LISTINGS [dim]{len(listings)}[/]")
         else:
-            header.update("LISTINGS [dim yellow]polling...[/]")
+            header.update(" LISTINGS [dim yellow]polling...[/]")
 
     def has_notable(self, listing_id: str) -> bool:
         return any(_has_notable(l) for l in self._listings if l.id == listing_id)
