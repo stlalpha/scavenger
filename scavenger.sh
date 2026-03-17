@@ -44,9 +44,8 @@ start_chrome() {
         --disable-default-apps
     )
     if [ "$mode" = "headless" ]; then
-        bold "Starting Chrome (background)..."
-        # Real Chrome session offscreen — avoids headless detection by eBay/Facebook
-        flags+=(--window-position=-9999,-9999 --window-size=1920,1080)
+        bold "Starting Chrome (headless)..."
+        flags+=(--headless=new --disable-blink-features=AutomationControlled --window-size=1920,1080)
     else
         bold "Starting Chrome..."
     fi

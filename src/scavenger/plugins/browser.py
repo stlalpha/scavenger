@@ -9,6 +9,9 @@ Pages open as real tabs in Chrome. Close the page when done; never close the con
 import asyncio
 import logging
 from playwright.async_api import async_playwright, Browser, Playwright, Page
+from playwright_stealth import Stealth
+
+_stealth = Stealth()
 
 logger = logging.getLogger(__name__)
 
@@ -52,4 +55,6 @@ async def new_page() -> Page:
     # Use the existing real Chrome context (has cookies, extensions, history)
     # Fall back to creating a context only if somehow none exist yet
     context = browser.contexts[0] if browser.contexts else await browser.new_context()
-    return await context.new_page()
+    page = await context.new_page()
+    await _stealth.apply_stealth_async(page)
+    return page
