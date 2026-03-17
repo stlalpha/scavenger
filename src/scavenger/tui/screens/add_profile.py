@@ -1,6 +1,6 @@
 import json as _json
+import os
 import re
-import httpx
 
 from scavenger.models import Profile
 from textual.app import ComposeResult
@@ -411,49 +411,23 @@ If the user has already entered values for some fields, improve and expand on th
         user = "\n".join(parts)
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "x-api-key": ai_config.anthropic_api_key,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
-                    json={
-                        "model": ai_config.escalation_model,
-                        "max_tokens": 1024,
-                        "system": system,
-                        "messages": [{"role": "user", "content": user}],
-                        "temperature": 0.3,
-                    },
-                )
-                if response.status_code != 200:
-                    self.notify(f"AI API error {response.status_code}: {response.text[:150]}", severity="error")
-                    return
-                try:
-                    data = response.json()
-                except Exception:
-                    self.notify(f"AI returned non-JSON: {response.text[:150]}", severity="error")
-                    return
-                # Find the first text block (skip thinking blocks)
-                content = ""
-                for block in data.get("content", []):
-                    if block.get("type") == "text":
-                        content = block["text"]
-                        break
-                if not content:
-                    self.notify(f"AI returned no text. Blocks: {[b.get('type') for b in data.get('content', [])]}", severity="error")
-                    return
-                suggestions = _json.loads(_extract_json(content))
-        except httpx.HTTPStatusError as e:
-            body = e.response.text[:200] if e.response else ""
-            self.notify(f"AI API {e.response.status_code}: {body}", severity="error")
-            return
+            from litellm import acompletion
+            os.environ.setdefault("ANTHROPIC_API_KEY", ai_config.anthropic_api_key)
+            model = f"anthropic/{ai_config.escalation_model}"
+            response = await acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.3,
+                max_tokens=1024,
+                timeout=30.0,
+            )
+            content = response.choices[0].message.content
+            suggestions = _json.loads(_extract_json(content))
         except Exception as e:
-            import traceback, logging
-            logging.getLogger(__name__).exception("AI suggest error")
-            raw = content[:100] if "content" in dir() else "no content"
-            self.notify(f"AI failed: {type(e).__name__}: {e}\nRaw: {raw}", severity="error")
+            self.notify(f"AI suggest failed: {type(e).__name__}: {e}", severity="error")
             return
 
         kw = suggestions.get("keywords", [])

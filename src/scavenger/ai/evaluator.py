@@ -1,16 +1,27 @@
 import asyncio
 import json as _json
 import logging
+import os
 import re
 from dataclasses import dataclass
-import httpx
+
+from litellm import acompletion
+
 from scavenger.ai.models import AIConfig, AIEvaluation
 from scavenger.ai.prompts import build_prompt, build_batch_prompt, build_escalation_prompt
 from scavenger.models import Profile, Listing
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 10
+# Suppress litellm's noisy default logging
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+BATCH_SIZE = 5  # smaller batches = fewer Ollama timeouts
+ESCALATION_DELAY = 1.0  # seconds between Anthropic calls to avoid rate limits
+MAX_ESCALATIONS_PER_BATCH = 5  # cap frontier calls per poll cycle
+
+
 def _extract_json(text: str) -> str:
     """Extract the first JSON object from model output."""
     text = text.strip()
@@ -54,14 +65,6 @@ def _match_escalation_keywords(keywords: list[str], title: str, description: str
     return [kw for kw in keywords if re.search(re.escape(kw.lower()), text)]
 
 
-def _ollama_base(config_url: str) -> str:
-    """Derive Ollama native API base from the configured URL.
-
-    Strips /v1 suffix if present (OpenAI compat path) to get the root.
-    """
-    return config_url.removesuffix("/v1").removesuffix("/")
-
-
 @dataclass
 class _EvalJob:
     profile: Profile
@@ -90,22 +93,26 @@ class NoopEvaluator:
 class AIEvaluator:
     def __init__(self, config: AIConfig):
         self._config = config
-        self._url = f"{_ollama_base(config.litellm_base_url)}/api/chat"
+        # Set API key for litellm's Anthropic calls
+        if config.anthropic_api_key:
+            os.environ.setdefault("ANTHROPIC_API_KEY", config.anthropic_api_key)
+        # Ollama model prefix for litellm
+        self._filter_model = f"ollama/{config.filter_model}"
+        self._filter_base = config.litellm_base_url.removesuffix("/v1").removesuffix("/")
+        # Anthropic model for escalation
+        self._escalation_model = f"anthropic/{config.escalation_model}"
         self._queue: asyncio.Queue[_EvalJob | None] = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
 
     async def start(self) -> None:
-        """Start the background evaluation worker."""
         self._worker_task = asyncio.create_task(self._worker())
 
     async def stop(self) -> None:
-        """Signal the worker to drain and stop."""
         await self._queue.put(None)
         if self._worker_task:
             await self._worker_task
 
     async def _worker(self) -> None:
-        """Single worker that processes evaluation jobs sequentially."""
         while True:
             job = await self._queue.get()
             if job is None:
@@ -119,16 +126,48 @@ class AIEvaluator:
             finally:
                 self._queue.task_done()
 
+    async def _call_filter(self, system: str, user: str) -> str:
+        """Call the local Ollama model via litellm."""
+        response = await acompletion(
+            model=self._filter_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.1,
+            timeout=self._config.filter_timeout_sec,
+            api_base=self._filter_base,
+            response_format={"type": "json_object"},
+        )
+        return response.choices[0].message.content
+
+    async def _call_frontier(self, system: str, user: str) -> str:
+        """Call the Anthropic frontier model via litellm."""
+        response = await acompletion(
+            model=self._escalation_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.1,
+            max_tokens=1024,
+            timeout=self._config.escalation_timeout_sec,
+        )
+        return _extract_json(response.choices[0].message.content)
+
     async def evaluate(self, profile: Profile, listing: Listing) -> AIEvaluation:
         """Single-listing evaluation with optional keyword-triggered escalation."""
-        evaluation = await self._call_model(
-            profile, listing,
-            model=self._config.filter_model,
-            timeout=self._config.filter_timeout_sec,
-        )
+        system, user = build_prompt(profile, listing)
+        try:
+            content = await self._call_filter(system, user)
+            evaluation = AIEvaluation.model_validate_json(content)
+        except Exception as e:
+            logger.warning("Filter eval failed: %s", e)
+            return AIEvaluation.passthrough()
+
         if not evaluation.relevant:
             return evaluation
-        # Escalate if cheap model says so OR if escalation keywords match
+
         should_escalate = evaluation.escalate
         matched: list[str] = []
         if self._config.escalation_enabled and profile.escalation_keywords:
@@ -150,7 +189,6 @@ class AIEvaluator:
     async def evaluate_batch(
         self, profile: Profile, listings: list[Listing]
     ) -> dict[str, AIEvaluation]:
-        """Queue listings for evaluation and await the result."""
         if not listings:
             return {}
         loop = asyncio.get_running_loop()
@@ -165,9 +203,13 @@ class AIEvaluator:
             chunk_results = await future
             all_results.update(chunk_results)
 
-        # Escalate listings that contain escalation keywords
+        # Escalate listings that contain escalation keywords (rate-limited)
         if self._config.escalation_enabled and profile.escalation_keywords:
+            escalation_count = 0
             for listing in listings:
+                if escalation_count >= MAX_ESCALATIONS_PER_BATCH:
+                    logger.info("Escalation cap reached (%d), deferring rest", MAX_ESCALATIONS_PER_BATCH)
+                    break
                 ev = all_results.get(listing.id)
                 if not ev or not ev.relevant:
                     continue
@@ -176,9 +218,11 @@ class AIEvaluator:
                 )
                 if matched:
                     logger.info(
-                        "Escalating %s — matched keywords: %s",
+                        "Escalating %s — matched: %s",
                         listing.id[:12], ", ".join(matched),
                     )
+                    if escalation_count > 0:
+                        await asyncio.sleep(ESCALATION_DELAY)
                     escalation = await self._escalate(profile, listing, matched)
                     all_results[listing.id] = AIEvaluation(
                         relevant=ev.relevant,
@@ -186,125 +230,45 @@ class AIEvaluator:
                         notable=escalation.notable or ev.notable,
                         escalate=escalation.escalate,
                     )
+                    escalation_count += 1
 
         return all_results
 
     async def _escalate(
         self, profile: Profile, listing: Listing, triggered_keywords: list[str]
     ) -> AIEvaluation:
-        """Send a listing to the frontier model for deeper evaluation."""
-        system_prompt, user_prompt = build_escalation_prompt(
-            profile, listing, triggered_keywords
-        )
+        system, user = build_escalation_prompt(profile, listing, triggered_keywords)
         try:
-            content = await self._call_anthropic(system_prompt, user_prompt)
+            content = await self._call_frontier(system, user)
             return AIEvaluation.model_validate_json(content)
         except Exception as e:
             logger.warning("Escalation failed for %s: %s", listing.id[:12], e)
             return AIEvaluation.passthrough()
 
-    async def _call_anthropic(
-        self, system_prompt: str, user_prompt: str, temperature: float = 0.1
-    ) -> str:
-        """Call the Anthropic Messages API. Returns the text content."""
-        api_key = self._config.anthropic_api_key
-        if not api_key:
-            raise ValueError("anthropic_api_key not set in [ai] config")
-        async with httpx.AsyncClient(timeout=self._config.escalation_timeout_sec) as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": self._config.escalation_model,
-                    "max_tokens": 1024,
-                    "system": system_prompt,
-                    "messages": [{"role": "user", "content": user_prompt}],
-                    "temperature": temperature,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            return _extract_json(data["content"][0]["text"])
-
     async def _process_batch(
         self, profile: Profile, listings: list[Listing]
     ) -> dict[str, AIEvaluation]:
-        system_prompt, user_prompt = build_batch_prompt(profile, listings)
+        system, user = build_batch_prompt(profile, listings)
         try:
-            async with httpx.AsyncClient(timeout=self._config.filter_timeout_sec) as client:
-                response = await client.post(
-                    self._url,
-                    json={
-                        "model": self._config.filter_model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "stream": False,
-                        "think": False,
-                        "format": "json",
-                        "options": {"temperature": 0.1},
-                    },
-                )
-                response.raise_for_status()
-                content = response.json()["message"]["content"]
-                parsed = _json.loads(content)
-                # Handle both {"results": [...]} and bare [...]
-                if isinstance(parsed, dict):
-                    parsed = parsed.get("results", parsed.get("evaluations", []))
-                if not isinstance(parsed, list):
-                    logger.warning("AI batch: expected list, got %s", type(parsed).__name__)
-                    return {l.id: AIEvaluation.passthrough() for l in listings}
-                results: dict[str, AIEvaluation] = {}
-                for item in parsed:
-                    try:
-                        listing_id = item.pop("id", None)
-                        if listing_id:
-                            results[listing_id] = AIEvaluation(**item)
-                    except Exception as e:
-                        logger.debug("AI batch: skipping malformed item: %s", e)
-                # Fill in passthrough for any listings the model missed
-                for listing in listings:
-                    if listing.id not in results:
-                        results[listing.id] = AIEvaluation.passthrough()
-                return results
-        except (httpx.HTTPError, httpx.TimeoutException) as e:
-            logger.warning("AI batch evaluation HTTP error: %s", e)
-            return {l.id: AIEvaluation.passthrough() for l in listings}
+            content = await self._call_filter(system, user)
+            parsed = _json.loads(content)
+            if isinstance(parsed, dict):
+                parsed = parsed.get("results", parsed.get("evaluations", []))
+            if not isinstance(parsed, list):
+                logger.warning("AI batch: expected list, got %s", type(parsed).__name__)
+                return {l.id: AIEvaluation.passthrough() for l in listings}
+            results: dict[str, AIEvaluation] = {}
+            for item in parsed:
+                try:
+                    listing_id = item.pop("id", None)
+                    if listing_id:
+                        results[listing_id] = AIEvaluation(**item)
+                except Exception as e:
+                    logger.debug("AI batch: skipping malformed item: %s", e)
+            for listing in listings:
+                if listing.id not in results:
+                    results[listing.id] = AIEvaluation.passthrough()
+            return results
         except Exception as e:
-            logger.warning("AI batch evaluation failed: %s", e)
+            logger.warning("AI batch eval failed (%s): %s", type(e).__name__, e)
             return {l.id: AIEvaluation.passthrough() for l in listings}
-
-    async def _call_model(
-        self, profile: Profile, listing: Listing, model: str, timeout: float
-    ) -> AIEvaluation:
-        system_prompt, user_prompt = build_prompt(profile, listing)
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    self._url,
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "stream": False,
-                        "think": False,
-                        "format": "json",
-                        "options": {"temperature": 0.1},
-                    },
-                )
-                response.raise_for_status()
-                content = response.json()["message"]["content"]
-                return AIEvaluation.model_validate_json(content)
-        except (httpx.HTTPError, httpx.TimeoutException) as e:
-            logger.warning("AI evaluation HTTP error: %s", e)
-            return AIEvaluation.passthrough()
-        except Exception as e:
-            logger.warning("AI evaluation failed: %s", e)
-            return AIEvaluation.passthrough()
