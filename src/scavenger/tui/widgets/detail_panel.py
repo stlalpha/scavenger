@@ -10,7 +10,6 @@ from scavenger.tui.widgets.thumbnail import ThumbnailCache
 
 logger = logging.getLogger(__name__)
 
-# Import textual-image; prefer Kitty TGP, fall back to auto, then nothing
 try:
     import os
     if os.environ.get("TERM", "") == "xterm-kitty":
@@ -20,6 +19,68 @@ try:
     HAS_IMAGE_WIDGET = True
 except ImportError:
     HAS_IMAGE_WIDGET = False
+
+SOURCE_COLORS = {"ebay": "yellow", "craigslist": "magenta", "facebook": "blue"}
+STATUS_LABELS = {
+    "new": "[bold cyan]NEW[/]",
+    "seen": "[dim]SEEN[/]",
+    "saved": "[bold green]SAVED[/]",
+    "dismissed": "[dim]DISMISSED[/]",
+    "snoozed": "[yellow]SNOOZED[/]",
+}
+
+
+def _render_listing(listing: Listing) -> str:
+    """Build Rich-formatted detail text for a listing."""
+    src_color = SOURCE_COLORS.get(listing.source_id, "white")
+    source = f"[{src_color} bold]{listing.source_id.upper()}[/]"
+    status = STATUS_LABELS.get(listing.status, listing.status)
+    price = f"[bold]${listing.price:,.2f}[/]" if listing.price else "[dim]no price[/]"
+
+    # Title block
+    lines = [
+        f"[bold]{listing.title}[/]",
+        f"{price}  {source}  {status}",
+    ]
+
+    # Location
+    if listing.location:
+        lines.append(f"[dim]{listing.location}[/]")
+
+    lines.append("")
+
+    # URL
+    lines.append(f"[dim underline]{listing.url}[/]")
+
+    # AI evaluation
+    if listing.ai_evaluation:
+        try:
+            ev = json.loads(listing.ai_evaluation)
+            if ev.get("notable") or ev.get("reason"):
+                lines.append("")
+                lines.append("[bold magenta]AI NOTES[/]")
+                if ev.get("notable"):
+                    lines.append(f"  [magenta]★[/] {ev['notable']}")
+                if ev.get("reason"):
+                    lines.append(f"  {ev['reason']}")
+        except Exception:
+            pass
+
+    # Description
+    if listing.description:
+        lines.append("")
+        lines.append(listing.description)
+
+    # Key hints
+    lines.append("")
+    lines.append(
+        "[dim]\\[o][/] open  "
+        "[dim]\\[s][/] save  "
+        "[dim]\\[d][/] dismiss  "
+        "[dim]\\[n][/] snooze"
+    )
+
+    return "\n".join(lines)
 
 
 class DetailPanel(Widget):
@@ -33,11 +94,24 @@ class DetailPanel(Widget):
     ]
 
     DEFAULT_CSS = """
-    DetailPanel { width: 100%; height: 100%; padding: 1; border: tall transparent; }
-    DetailPanel:focus { border: tall $accent; }
-    DetailPanel VerticalScroll { height: 100%; }
+    DetailPanel {
+        width: 100%;
+        height: 100%;
+        background: $surface;
+        border-left: tall transparent;
+    }
+    DetailPanel:focus { border-left: tall $accent; }
+    DetailPanel #detail-header {
+        dock: top;
+        height: 3;
+        padding: 1 1 0 1;
+        color: $text-muted;
+        text-style: bold;
+        background: $surface;
+    }
+    DetailPanel VerticalScroll { height: 1fr; padding: 0 2; }
     DetailPanel #hero-image { height: 20; width: 100%; }
-    DetailPanel #detail-content { width: 100%; }
+    DetailPanel #detail-content { width: 100%; padding: 1 0; }
     """
 
     def __init__(self) -> None:
@@ -46,10 +120,11 @@ class DetailPanel(Widget):
         self._thumbnail_cache = ThumbnailCache()
 
     def compose(self) -> ComposeResult:
+        yield Static("DETAIL", id="detail-header")
         with VerticalScroll():
             if HAS_IMAGE_WIDGET:
                 yield KittyImage("", id="hero-image")
-            yield Static("Select a listing", id="detail-content")
+            yield Static("[dim]Select a listing[/]", id="detail-content")
 
     @property
     def current_listing(self) -> Listing | None:
@@ -68,29 +143,14 @@ class DetailPanel(Widget):
     def show_listing(self, listing: Listing | None) -> None:
         self._listing = listing
         content = self.query_one("#detail-content", Static)
+        header = self.query_one("#detail-header", Static)
         if listing is None:
-            content.update("Select a listing")
+            content.update("[dim]Select a listing[/]")
+            header.update("DETAIL")
             self._clear_image()
             return
-        ai_section = ""
-        if listing.ai_evaluation:
-            try:
-                ev = json.loads(listing.ai_evaluation)
-                if ev.get("notable"):
-                    ai_section += f"\n★ {ev['notable']}"
-                if ev.get("reason"):
-                    ai_section += f"\n{ev['reason']}"
-            except Exception:
-                pass
-        price = f"${listing.price:.2f}" if listing.price else "—"
-        text = (
-            f"{listing.title}\n{price} · {listing.source_id.upper()}\n{listing.url}"
-            + (f"\n\n{ai_section.strip()}" if ai_section else "")
-            + (f"\n\n{listing.description}" if listing.description else "")
-            + "\n\n\\[o] open  \\[s] save  \\[d] dismiss  \\[n] snooze"
-        )
-        content.update(text)
-        # Load hero image async
+        header.update(f"DETAIL  [dim]{listing.source_id.upper()}[/]")
+        content.update(_render_listing(listing))
         if listing.image_urls:
             self.run_worker(self._load_image(listing.image_urls[0]), exclusive=True)
         else:

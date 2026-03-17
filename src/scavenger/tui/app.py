@@ -13,6 +13,14 @@ POLL_INTERVAL = 2.0
 
 
 class ScavengerApp(App):
+    TITLE = "SCAVENGER"
+
+    CSS = """
+    Screen {
+        background: $background;
+    }
+    """
+
     BINDINGS = [
         Binding("q", "quit_tui", "Quit"),
         Binding("Q", "quit_all", "Quit+Stop"),

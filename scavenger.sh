@@ -21,16 +21,32 @@ daemon_alive() {
     echo '{"command":"status"}' | nc -U "${SOCKET}" 2>/dev/null | grep -q '"ok"'
 }
 
-ensure_chrome() {
+# Start Chrome in headless mode (default) or visible mode for login
+# Usage: start_chrome [--visible]
+start_chrome() {
+    local mode="headless"
+    [ "${1:-}" = "--visible" ] && mode="visible"
+
     if [ -n "$(chrome_pid)" ]; then
         dim "Chrome CDP :${CDP_PORT} already up"
         return
     fi
-    bold "Starting Chrome..."
+
     mkdir -p "${CHROME_DATA}"
-    "${CHROME}" --remote-debugging-port="${CDP_PORT}" \
-        --user-data-dir="${CHROME_DATA}" \
-        --no-first-run --disable-default-apps >/dev/null 2>&1 &
+    local flags=(
+        --remote-debugging-port="${CDP_PORT}"
+        --user-data-dir="${CHROME_DATA}"
+        --no-first-run
+        --disable-default-apps
+    )
+    if [ "$mode" = "headless" ]; then
+        bold "Starting Chrome (headless)..."
+        flags+=(--headless=new)
+    else
+        bold "Starting Chrome..."
+    fi
+
+    "${CHROME}" "${flags[@]}" >/dev/null 2>&1 &
     local i=0
     while [ -z "$(chrome_pid)" ] && [ "$i" -lt 20 ]; do sleep 0.25; i=$((i+1)); done
     if [ -n "$(chrome_pid)" ]; then
@@ -39,6 +55,8 @@ ensure_chrome() {
         red "Chrome failed to start"; exit 1
     fi
 }
+
+ensure_chrome() { start_chrome; }
 
 ensure_daemon() {
     if daemon_alive; then
@@ -156,7 +174,7 @@ sys.exit(1)
 
 # Open facebook and wait for the user to log in, polling until they do
 ensure_fb_login() {
-    # Quick check: open facebook.com — if it doesn't redirect to login, we're good
+    # Quick check with headless Chrome — open facebook, see if it redirects to login
     curl -s -X PUT "http://localhost:${CDP_PORT}/json/new?https://www.facebook.com/" >/dev/null
     sleep 3
 
@@ -165,10 +183,16 @@ ensure_fb_login() {
         return
     fi
 
-    # Not logged in — tell the user and poll until they finish
+    # Need visible Chrome for login — stop headless, start visible
+    local cpid; cpid=$(chrome_pid)
+    [ -n "$cpid" ] && kill "$cpid" 2>/dev/null && sleep 1
+
+    start_chrome --visible
+    curl -s -X PUT "http://localhost:${CDP_PORT}/json/new?https://www.facebook.com/login" >/dev/null
+
     echo
     bold "Facebook login required."
-    dim "Log in to Facebook in the Chrome window that just opened."
+    dim "Log in to Facebook in the Chrome window."
     dim "Waiting..."
     echo
 
@@ -176,6 +200,12 @@ ensure_fb_login() {
         sleep 2
     done
     green "Facebook login verified"
+
+    # Switch back to headless for scraping
+    sleep 1
+    cpid=$(chrome_pid)
+    [ -n "$cpid" ] && kill "$cpid" 2>/dev/null && sleep 1
+    start_chrome
 }
 
 # Check which sources need logins and handle them
@@ -193,7 +223,7 @@ case "${1:-}" in
     stop)    cmd_stop ;;
     status)  cmd_status ;;
     log)     cmd_log ;;
-    login)   ensure_chrome; ensure_logins ;;
+    login)   start_chrome --visible; ensure_logins ;;
     tui)     shift; cmd_tui "$@" ;;
     restart) cmd_stop; echo; cmd_start ;;
     *)       echo "Usage: $0 {start|stop|status|log|login|tui|restart}" ;;

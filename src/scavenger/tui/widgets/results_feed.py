@@ -2,10 +2,19 @@ import json
 from datetime import datetime, timezone
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import ListItem, ListView, Label
+from textual.widgets import ListItem, ListView, Label, Static
 from textual.reactive import reactive
 from scavenger.models import Listing
 from scavenger.tui.messages import ListingSelected, ListingOpened
+
+SOURCE_COLORS = {"ebay": "yellow", "craigslist": "magenta", "facebook": "blue"}
+STATUS_ICONS = {
+    "new": "[bold cyan]●[/]",
+    "seen": "[dim]○[/]",
+    "saved": "[bold green]★[/]",
+    "dismissed": "[dim strike]✕[/]",
+    "snoozed": "[dim yellow]◑[/]",
+}
 
 
 def _age(dt: datetime) -> str:
@@ -13,6 +22,8 @@ def _age(dt: datetime) -> str:
         dt = dt.replace(tzinfo=timezone.utc)
     delta = datetime.now(timezone.utc) - dt
     s = int(delta.total_seconds())
+    if s < 60:
+        return "now"
     if s < 3600:
         return f"{s // 60}m"
     if s < 86400:
@@ -30,13 +41,14 @@ def _has_notable(listing: Listing) -> bool:
 
 
 def _card_label(listing: Listing) -> str:
-    unread = "● " if listing.status == "new" else "  "
-    star = "★ " if _has_notable(listing) else ""
-    price = f"${listing.price:.0f}" if listing.price else "—"
-    source = listing.source_id[:2].upper()
-    age = _age(listing.first_seen)
+    icon = STATUS_ICONS.get(listing.status, " ")
+    notable = " [bold magenta]★[/]" if _has_notable(listing) else ""
+    price = f"[bold]${listing.price:,.0f}[/]" if listing.price else "[dim]—[/]"
+    src_color = SOURCE_COLORS.get(listing.source_id, "white")
+    source = f"[{src_color}]{listing.source_id[:2].upper()}[/]"
+    age = f"[dim]{_age(listing.first_seen)}[/]"
     title = listing.title
-    return f"{unread}{star}{title}\n  {price} · {source} · {age}"
+    return f"{icon}{notable} {title}\n   {price}  {source}  {age}"
 
 
 class ResultsFeed(Widget):
@@ -52,7 +64,26 @@ class ResultsFeed(Widget):
     ResultsFeed {
         width: 100%;
         height: 100%;
-        border-right: solid $panel-darken-1;
+        background: $surface;
+    }
+    ResultsFeed #feed-header {
+        dock: top;
+        height: 3;
+        padding: 1 1 0 2;
+        color: $text-muted;
+        text-style: bold;
+        background: $surface;
+    }
+    ResultsFeed ListView {
+        height: 1fr;
+        background: transparent;
+    }
+    ResultsFeed ListView > ListItem {
+        padding: 0 1;
+        height: auto;
+    }
+    ResultsFeed ListView > ListItem.--highlight {
+        background: $boost;
     }
     """
 
@@ -64,6 +95,7 @@ class ResultsFeed(Widget):
         self._listing_fingerprint: str = ""
 
     def compose(self) -> ComposeResult:
+        yield Static("LISTINGS", id="feed-header")
         yield ListView()
 
     @property
@@ -77,11 +109,9 @@ class ResultsFeed(Widget):
         return None
 
     def invalidate_fingerprint(self) -> None:
-        """Force next update_listings to re-render even if IDs haven't changed."""
         self._listing_fingerprint = ""
 
     async def update_listings(self, listings: list[Listing]) -> None:
-        # Skip full re-render if nothing changed (id + status is enough to detect changes)
         fingerprint = "|".join(f"{l.id}:{l.status}" for l in listings)
         if fingerprint == self._listing_fingerprint:
             return
@@ -93,6 +123,13 @@ class ResultsFeed(Widget):
             await list_view.append(ListItem(Label(_card_label(listing))))
         self.cursor = min(self.cursor, max(0, len(listings) - 1))
         self._update_cursor()
+        # Update header with count
+        header = self.query_one("#feed-header", Static)
+        new_count = sum(1 for l in listings if l.status == "new")
+        if new_count > 0:
+            header.update(f"LISTINGS [bold cyan]{new_count} new[/]")
+        else:
+            header.update(f"LISTINGS [dim]{len(listings)}[/]")
 
     def has_notable(self, listing_id: str) -> bool:
         return any(_has_notable(l) for l in self._listings if l.id == listing_id)
@@ -111,7 +148,6 @@ class ResultsFeed(Widget):
             self._sync_list_view()
 
     def _sync_list_view(self) -> None:
-        """Push cursor position into the ListView without re-triggering our handler."""
         list_view = self.query_one(ListView)
         if self._listings and 0 <= self.cursor < len(self._listings):
             list_view.index = self.cursor
@@ -122,7 +158,6 @@ class ResultsFeed(Widget):
             self.post_message(ListingSelected(listing=self._listings[self.cursor]))
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        """Sync cursor and show listing when ListView moves (keyboard or mouse)."""
         event.stop()
         list_view = self.query_one(ListView)
         i = list_view.index
@@ -135,7 +170,6 @@ class ResultsFeed(Widget):
             self.post_message(ListingOpened(listing=self._listings[self.cursor]))
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        """Handle click/Enter on ListView item."""
         event.stop()
         list_view = self.query_one(ListView)
         i = list_view.index
