@@ -114,13 +114,27 @@ class ScavengerApp(App):
     def action_focus_prev_panel(self) -> None:
         self.screen.focus_previous()
 
-    def action_open_url(self) -> None:
+    def _active_listing(self) -> "Listing | None":
+        from scavenger.tui.widgets.detail_panel import DetailPanel
         from scavenger.tui.widgets.results_feed import ResultsFeed
-        import subprocess
-        feed = self.query_one(ResultsFeed)
-        listing = feed.focused_listing
+        try:
+            detail = self.screen.query_one(DetailPanel)
+            if detail.current_listing:
+                return detail.current_listing
+        except Exception:
+            pass
+        try:
+            feed = self.screen.query_one(ResultsFeed)
+            return feed.focused_listing
+        except Exception:
+            return None
+
+    def action_open_url(self) -> None:
+        import subprocess, sys
+        listing = self._active_listing()
         if listing:
-            subprocess.Popen(["xdg-open", listing.url])
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.Popen([opener, listing.url])
 
     def action_dismiss_listing(self) -> None:
         self._mark_focused("dismissed")
@@ -132,9 +146,7 @@ class ScavengerApp(App):
         self._mark_focused("snoozed")
 
     def _mark_focused(self, status: str) -> None:
-        from scavenger.tui.widgets.results_feed import ResultsFeed
-        feed = self.query_one(ResultsFeed)
-        listing = feed.focused_listing
+        listing = self._active_listing()
         if listing and self._data_layer:
             listing_id = listing.id
             async def _do() -> None:

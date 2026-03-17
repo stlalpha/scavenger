@@ -35,7 +35,7 @@ def _card_label(listing: Listing) -> str:
     price = f"${listing.price:.0f}" if listing.price else "—"
     source = listing.source_id[:2].upper()
     age = _age(listing.first_seen)
-    title = listing.title[:40] + ("…" if len(listing.title) > 40 else "")
+    title = listing.title
     return f"{unread}{star}{title}\n  {price} · {source} · {age}"
 
 

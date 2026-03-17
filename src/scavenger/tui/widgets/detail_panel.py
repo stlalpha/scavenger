@@ -23,8 +23,18 @@ except ImportError:
 
 
 class DetailPanel(Widget):
+    can_focus = True
+
+    BINDINGS = [
+        ("o", "open_url", "Open"),
+        ("s", "save_listing", "Save"),
+        ("d", "dismiss_listing", "Dismiss"),
+        ("n", "snooze_listing", "Snooze"),
+    ]
+
     DEFAULT_CSS = """
-    DetailPanel { width: 100%; height: 100%; padding: 1; }
+    DetailPanel { width: 100%; height: 100%; padding: 1; border: tall transparent; }
+    DetailPanel:focus { border: tall $accent; }
     DetailPanel VerticalScroll { height: 100%; }
     DetailPanel #hero-image { height: 20; width: 100%; }
     DetailPanel #detail-content { width: 100%; }
@@ -77,7 +87,7 @@ class DetailPanel(Widget):
             f"{listing.title}\n{price} · {listing.source_id.upper()}\n{listing.url}"
             + (f"\n\n{ai_section.strip()}" if ai_section else "")
             + (f"\n\n{listing.description}" if listing.description else "")
-            + "\n\n[o] open  [s] save  [d] dismiss  [n] snooze"
+            + "\n\n\\[o] open  \\[s] save  \\[d] dismiss  \\[n] snooze"
         )
         content.update(text)
         # Load hero image async
@@ -104,3 +114,31 @@ class DetailPanel(Widget):
                 image_widget.image = ""
             except Exception:
                 pass
+
+    def _mark_status(self, status: str) -> None:
+        if not self._listing:
+            return
+        listing_id = self._listing.id
+        data_layer = getattr(self.app, "_data_layer", None)
+        if not data_layer:
+            return
+        async def _do() -> None:
+            await data_layer.mark_status(listing_id, status)
+            await self.app._poll()  # type: ignore[attr-defined]
+        self.app.run_worker(_do(), exclusive=False)
+
+    def action_open_url(self) -> None:
+        if not self._listing:
+            return
+        import subprocess, sys
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.Popen([opener, self._listing.url])
+
+    def action_save_listing(self) -> None:
+        self._mark_status("saved")
+
+    def action_dismiss_listing(self) -> None:
+        self._mark_status("dismissed")
+
+    def action_snooze_listing(self) -> None:
+        self._mark_status("snoozed")
