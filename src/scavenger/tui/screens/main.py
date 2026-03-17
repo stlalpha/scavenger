@@ -1,9 +1,10 @@
 from textual.app import ComposeResult
 from textual.screen import Screen
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from scavenger.tui.widgets.profile_sidebar import ProfileSidebar
 from scavenger.tui.widgets.results_feed import ResultsFeed
 from scavenger.tui.widgets.detail_panel import DetailPanel
+from scavenger.tui.widgets.log_panel import LogPanel
 from scavenger.tui.widgets.status_bar import StatusBar
 from scavenger.tui.messages import ListingSelected, ListingOpened, ProfileSelected, DataUpdated
 from scavenger.models import Profile
@@ -16,23 +17,39 @@ class MainScreen(Screen):
         background: $background;
     }
     MainScreen #main-columns {
-        layout: horizontal;
         height: 1fr;
     }
-    MainScreen ProfileSidebar {
+
+    /* Left side: profiles + listings on top, log on bottom */
+    #left-side {
+        width: 1fr;
+        min-width: 50;
+    }
+    #left-top {
+        height: 1fr;
+    }
+    #left-top ProfileSidebar {
         width: 1fr;
         min-width: 20;
         max-width: 30;
         border-right: vkey $panel-darken-2;
     }
-    MainScreen ResultsFeed {
+    #left-top ResultsFeed {
         width: 2fr;
         min-width: 30;
-        border-right: vkey $panel-darken-2;
     }
+
+    /* Log panel fills bottom of left side */
+    #left-side LogPanel {
+        height: 1fr;
+        border-top: hkey $panel-darken-2;
+    }
+
+    /* Right side: detail panel */
     MainScreen DetailPanel {
-        width: 3fr;
+        width: 1fr;
         min-width: 40;
+        border-left: vkey $panel-darken-2;
     }
     """
 
@@ -42,8 +59,11 @@ class MainScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main-columns"):
-            yield ProfileSidebar(profiles=self._profiles)
-            yield ResultsFeed()
+            with Vertical(id="left-side"):
+                with Horizontal(id="left-top"):
+                    yield ProfileSidebar(profiles=self._profiles)
+                    yield ResultsFeed()
+                yield LogPanel()
             yield DetailPanel()
         yield StatusBar()
 
