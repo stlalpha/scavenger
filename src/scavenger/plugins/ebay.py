@@ -12,14 +12,13 @@ logger = logging.getLogger(__name__)
 SEARCH_URL = "https://www.ebay.com/sch/i.html"
 PRICE_RE = re.compile(r"[\$£€]([0-9,]+(?:\.[0-9]{2})?)")
 
-# Try these selectors in order — eBay occasionally restructures their DOM
-ITEM_SELECTORS = [".s-item", "li.s-item", ".srp-results .s-item", "[data-viewport]"]
+# Try these selectors in order — eBay restructures their DOM periodically
+ITEM_SELECTORS = [".s-card", ".s-item", "li.s-item", "li[data-viewport]"]
 
-# eBay has two DOM generations: legacy (.s-item__*) and modern (.s-card__*)
 TITLE_SELECTORS = [".s-card__title", ".s-item__title"]
-LINK_SELECTORS = [".s-card__link", ".s-item__link"]
+LINK_SELECTORS = [".s-card__link", ".s-item__link", "a[href*='/itm/']"]
 PRICE_SELECTORS = [".s-card__price", ".s-item__price"]
-IMAGE_SELECTORS = [".s-card__image", ".s-item__image-img"]
+IMAGE_SELECTORS = [".s-card__image img", "img[src*=ebayimg]", ".s-item__image-img"]
 LOCATION_SELECTORS = [".s-card__location", ".s-item__location"]
 
 
@@ -120,9 +119,13 @@ class EbayPlugin:
 
                     image_urls = []
                     if img_el:
-                        for attr in ("src", "data-src"):
-                            url = await img_el.get_attribute(attr)
-                            if url and not url.startswith("data:") and url.startswith("http"):
+                        for attr in ("src", "data-src", "srcset"):
+                            raw = await img_el.get_attribute(attr)
+                            if not raw or raw.startswith("data:"):
+                                continue
+                            # srcset has "url 1x, url 2x" format — take the first
+                            url = raw.split(",")[0].split(" ")[0].strip()
+                            if url.startswith("http"):
                                 image_urls = [url]
                                 break
 
