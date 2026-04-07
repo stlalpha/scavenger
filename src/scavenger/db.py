@@ -95,6 +95,7 @@ class Database:
         self._conn = await aiosqlite.connect(self.path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(SCHEMA)
+        await self._conn.execute("PRAGMA busy_timeout = 5000")
         await self._conn.commit()
 
     async def migrate(self) -> None:
@@ -255,11 +256,16 @@ class Database:
         """Return the subset of listing_ids that already exist in the database."""
         if not listing_ids:
             return set()
-        placeholders = ",".join("?" for _ in listing_ids)
-        cursor = await self._conn.execute(
-            f"SELECT id FROM listings WHERE id IN ({placeholders})", listing_ids
-        )
-        return {row[0] for row in await cursor.fetchall()}
+        result = set()
+        chunk_size = 500
+        for i in range(0, len(listing_ids), chunk_size):
+            chunk = listing_ids[i : i + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            cursor = await self._conn.execute(
+                f"SELECT id FROM listings WHERE id IN ({placeholders})", chunk
+            )
+            result.update(row[0] for row in await cursor.fetchall())
+        return result
 
     async def count_new_by_profile(self) -> dict[str, int]:
         """Return {profile_id: count} for listings with status='new'."""

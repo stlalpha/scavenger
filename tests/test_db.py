@@ -196,6 +196,15 @@ async def test_update_listing_status_rejects_invalid(db):
         await db.update_listing_status("abc123", "bogus")
 
 
+async def test_get_existing_ids_large_batch(db):
+    """Verify get_existing_ids handles >999 IDs without error."""
+    for i in range(5):
+        await db.upsert_listing(make_listing(id=f"known-{i}", url=f"https://ebay.com/{i}"))
+    all_ids = [f"known-{i}" for i in range(5)] + [f"unknown-{i}" for i in range(1495)]
+    result = await db.get_existing_ids(all_ids)
+    assert result == {f"known-{i}" for i in range(5)}
+
+
 async def test_ai_evaluation_persists_through_upsert(db):
     from datetime import datetime, timezone
     await db.migrate()
