@@ -33,24 +33,18 @@ class AIConfig(BaseModel):
     def _resolve_env_keys(self) -> "AIConfig":
         if not self.anthropic_api_key:
             self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        # Fallback: try loading from .env file next to the project
         if not self.anthropic_api_key:
-            for dotenv in [
-                os.path.join(os.getcwd(), ".env"),
-                os.path.expanduser("~/.config/scavenger/.env"),
-            ]:
-                if os.path.isfile(dotenv):
-                    try:
-                        with open(dotenv) as f:
-                            for line in f:
-                                line = line.strip()
-                                if line.startswith("ANTHROPIC_API_KEY=") and not line.startswith("#"):
-                                    val = line.split("=", 1)[1].strip()
-                                    if val:
-                                        self.anthropic_api_key = val
-                                        break
-                    except OSError:
-                        pass
-                if self.anthropic_api_key:
-                    break
+            dotenv = os.path.expanduser("~/.config/scavenger/.env")
+            if os.path.isfile(dotenv):
+                try:
+                    with open(dotenv) as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith("ANTHROPIC_API_KEY=") and not line.startswith("#"):
+                                val = line.split("=", 1)[1].strip()
+                                if val:
+                                    self.anthropic_api_key = val
+                                    break
+                except OSError:
+                    pass
         return self
