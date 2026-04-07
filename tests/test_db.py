@@ -183,6 +183,19 @@ async def test_get_active_listings_excludes_dismissed(db):
     assert "a2" in ids
 
 
+async def test_busy_timeout_is_set(db):
+    """Verify busy_timeout is configured on connection."""
+    cursor = await db._conn.execute("PRAGMA busy_timeout")
+    row = await cursor.fetchone()
+    assert row[0] == 5000
+
+
+async def test_update_listing_status_rejects_invalid(db):
+    await db.upsert_listing(make_listing())
+    with pytest.raises(ValueError, match="Invalid status"):
+        await db.update_listing_status("abc123", "bogus")
+
+
 async def test_ai_evaluation_persists_through_upsert(db):
     from datetime import datetime, timezone
     await db.migrate()

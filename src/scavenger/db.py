@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS sources (
 """
 
 
+VALID_STATUSES = {"new", "seen", "saved", "dismissed", "snoozed"}
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -177,6 +180,8 @@ class Database:
 
     async def update_listing_status(self, listing_id: str, status: str) -> None:
         """Update the status field of a listing by ID."""
+        if status not in VALID_STATUSES:
+            raise ValueError(f"Invalid status: {status!r} (must be one of {VALID_STATUSES})")
         await self._conn.execute(
             "UPDATE listings SET status=? WHERE id=?",
             (status, listing_id),
