@@ -69,14 +69,19 @@ class CraigslistPlugin:
         return self._resolved_cities
 
     async def fetch(self, profile: Profile) -> list[Listing]:
-        # Craigslist doesn't support grouped OR — use first variant per group
         keywords = " ".join(
             kw if isinstance(kw, str) else kw[0]
             for kw in profile.keywords
         )
         cities = await self._get_cities()
+        sem = asyncio.Semaphore(MAX_CONCURRENT_CITIES)
+
+        async def _limited_fetch(city: str) -> list[Listing]:
+            async with sem:
+                return await self._fetch_city(city, keywords, profile)
+
         results = await asyncio.gather(
-            *[self._fetch_city(city, keywords, profile) for city in cities],
+            *[_limited_fetch(city) for city in cities],
             return_exceptions=False,
         )
         return [listing for city_listings in results for listing in city_listings]
