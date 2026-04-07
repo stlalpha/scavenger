@@ -117,8 +117,8 @@ class DetailPanel(Widget):
     DetailPanel #detail-content { width: 100%; padding: 1 0; }
     """
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
         self._listing: Listing | None = None
         self._thumbnail_cache = ThumbnailCache()
         self._images: list[str] = []
@@ -147,6 +147,9 @@ class DetailPanel(Widget):
             return False
 
     def show_listing(self, listing: Listing | None) -> None:
+        # Skip re-render if same listing — avoids flash on poll cycle
+        if listing is not None and self._listing is not None and listing.id == self._listing.id:
+            return
         self._listing = listing
         self._images = []
         self._img_idx = 0
@@ -160,19 +163,25 @@ class DetailPanel(Widget):
         clr = SRC_CLR.get(listing.source_id, "#75715e")
         hdr.update(f"╶ detail [{clr}]{listing.source_id}[/]")
 
+        # Clear stale image immediately before loading new one
+        self._clear_image()
+
         # Start with the thumbnail from the search results
         if listing.image_urls:
             self._images = list(listing.image_urls)
-            self.run_worker(self._load_current_image(), exclusive=True)
-        else:
-            self._clear_image()
-
+            self.run_worker(self._load_image_for(listing.id), exclusive=True, group="detail-images")
         content.update(_render(listing, self._img_idx, len(self._images)))
 
         # Fetch full gallery after a debounce — don't scrape while user is arrowing through
         if listing.url and listing.url.startswith("http"):
             self._pending_scrape_id = listing.id
-            self.run_worker(self._debounced_fetch(listing.url, listing.id), exclusive=False, group="detail-images")
+            self.run_worker(self._debounced_fetch(listing.url, listing.id), exclusive=True, group="detail-gallery")
+
+    async def _load_image_for(self, listing_id: str) -> None:
+        """Load current image, bailing if listing changed."""
+        if self._listing is None or self._listing.id != listing_id:
+            return
+        await self._load_current_image()
 
     async def _debounced_fetch(self, url: str, listing_id: str) -> None:
         """Wait 1.5s before scraping — if user moved on, abort."""
@@ -191,6 +200,7 @@ class DetailPanel(Widget):
             if self._listing and self._listing.id == listing_id and images:
                 self._images = images
                 self._img_idx = 0
+                self._clear_image()
                 await self._load_current_image()
                 self._update_content()
         except Exception as e:
@@ -224,13 +234,15 @@ class DetailPanel(Widget):
     def action_next_image(self) -> None:
         if self._images and len(self._images) > 1:
             self._img_idx = (self._img_idx + 1) % len(self._images)
-            self.run_worker(self._load_current_image(), exclusive=True)
+            self._clear_image()
+            self.run_worker(self._load_current_image(), exclusive=True, group="detail-images")
             self._update_content()
 
     def action_prev_image(self) -> None:
         if self._images and len(self._images) > 1:
             self._img_idx = (self._img_idx - 1) % len(self._images)
-            self.run_worker(self._load_current_image(), exclusive=True)
+            self._clear_image()
+            self.run_worker(self._load_current_image(), exclusive=True, group="detail-images")
             self._update_content()
 
     def _mark_status(self, status: str) -> None:

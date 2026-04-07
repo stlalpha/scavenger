@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Literal
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import ListItem, ListView, Label, Static
@@ -8,6 +9,32 @@ from scavenger.models import Listing
 from scavenger.tui.messages import ListingSelected, ListingOpened
 
 SRC_CLR = {"ebay": "#e6db74", "craigslist": "#f92672", "facebook": "#66d9ef"}
+
+SortKey = Literal["newest", "oldest", "price_low", "price_high", "relevance", "source"]
+SORT_LABELS: list[tuple[SortKey, str]] = [
+    ("newest", "newest"),
+    ("oldest", "oldest"),
+    ("price_low", "price ↑"),
+    ("price_high", "price ↓"),
+    ("relevance", "score"),
+    ("source", "source"),
+]
+
+
+def _sort_listings(listings: list[Listing], key: SortKey) -> list[Listing]:
+    if key == "newest":
+        return sorted(listings, key=lambda l: l.first_seen, reverse=True)
+    if key == "oldest":
+        return sorted(listings, key=lambda l: l.first_seen)
+    if key == "price_low":
+        return sorted(listings, key=lambda l: (l.price is None, l.price or 0))
+    if key == "price_high":
+        return sorted(listings, key=lambda l: (l.price is None, -(l.price or 0)))
+    if key == "relevance":
+        return sorted(listings, key=lambda l: l.relevance_score, reverse=True)
+    if key == "source":
+        return sorted(listings, key=lambda l: (l.source_id, l.first_seen), reverse=True)
+    return listings
 
 
 def _age(dt: datetime) -> str:
@@ -56,6 +83,7 @@ class ResultsFeed(Widget):
         ("down", "cursor_down", "Down"),
         ("up", "cursor_up", "Up"),
         ("enter", "open_listing", "Open"),
+        ("S", "cycle_sort", "Sort"),
     ]
 
     DEFAULT_CSS = """
@@ -89,10 +117,14 @@ class ResultsFeed(Widget):
 
     cursor: reactive[int] = reactive(0)
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
         self._listings: list[Listing] = []
+        self._raw_listings: list[Listing] = []
         self._listing_fingerprint: str = ""
+        self._sort_key: SortKey = "newest"
+        self._sort_idx: int = 0
+        self._awaiting_poll: bool = True
 
     def compose(self) -> ComposeResult:
         yield Static("╶ listings", id="feed-hdr")
@@ -109,14 +141,23 @@ class ResultsFeed(Widget):
         return None
 
     def invalidate_fingerprint(self) -> None:
-        self._listing_fingerprint = ""
+        self._listing_fingerprint = "__stale__"
+        self._awaiting_poll = True
 
-    async def update_listings(self, listings: list[Listing]) -> None:
+    async def update_listings(self, listings: list[Listing], from_poll: bool = False) -> None:
+        if from_poll:
+            self._awaiting_poll = False
         fp = "|".join(f"{l.id}:{l.status}" for l in listings)
         if fp == self._listing_fingerprint:
             return
         self._listing_fingerprint = fp
-        self._listings = listings
+        self._raw_listings = listings
+        sorted_listings = _sort_listings(listings, self._sort_key)
+        self._listings = sorted_listings
+        await self._render_list()
+
+    async def _render_list(self) -> None:
+        listings = self._listings
         lv = self.query_one(ListView)
         await lv.clear()
         for listing in listings:
@@ -124,15 +165,21 @@ class ResultsFeed(Widget):
         self.cursor = min(self.cursor, max(0, len(listings) - 1))
         self._update_cursor()
         if not listings:
-            await lv.append(ListItem(Label("[#75715e italic]  waiting for results…[/]")))
+            if self._awaiting_poll:
+                await lv.append(ListItem(Label("[#75715e italic]  waiting for results…[/]")))
+            else:
+                await lv.append(ListItem(Label("[#75715e italic]  no listings found[/]")))
         hdr = self.query_one("#feed-hdr", Static)
+        sort_label = f"[#3a3a3a]{dict(SORT_LABELS)[self._sort_key]}[/]"
         nc = sum(1 for l in listings if l.status == "new")
         if nc > 0:
-            hdr.update(f"╶ listings [bold #66d9ef]{nc} new[/]")
+            hdr.update(f"╶ listings [bold #66d9ef]{nc} new[/] {sort_label}")
         elif listings:
-            hdr.update(f"╶ listings [#75715e]{len(listings)}[/]")
-        else:
+            hdr.update(f"╶ listings [#75715e]{len(listings)}[/] {sort_label}")
+        elif self._awaiting_poll:
             hdr.update("╶ listings [#fd971f]polling…[/]")
+        else:
+            hdr.update("╶ listings [#75715e]empty[/]")
 
     def has_notable(self, listing_id: str) -> bool:
         return any(_has_notable(l) for l in self._listings if l.id == listing_id)
@@ -178,6 +225,13 @@ class ResultsFeed(Widget):
         i = lv.index
         if i is not None and 0 <= i < len(self._listings):
             self.post_message(ListingOpened(listing=self._listings[i]))
+
+    def action_cycle_sort(self) -> None:
+        self._sort_idx = (self._sort_idx + 1) % len(SORT_LABELS)
+        self._sort_key = SORT_LABELS[self._sort_idx][0]
+        self._listings = _sort_listings(self._raw_listings, self._sort_key)
+        self._listing_fingerprint = ""  # force re-render
+        self.run_worker(self._render_list(), exclusive=True)
 
     def watch_cursor(self, cursor: int) -> None:
         self._update_cursor()

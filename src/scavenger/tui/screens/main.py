@@ -6,6 +6,7 @@ from scavenger.tui.widgets.results_feed import ResultsFeed
 from scavenger.tui.widgets.detail_panel import DetailPanel
 from scavenger.tui.widgets.log_panel import LogPanel
 from scavenger.tui.widgets.status_bar import StatusBar
+from scavenger.tui.widgets.splitter import VSplitter, HSplitter
 from scavenger.tui.messages import ListingSelected, ListingOpened, ProfileSelected, DataUpdated
 from scavenger.models import Profile
 
@@ -21,28 +22,28 @@ class MainScreen(Screen):
     }
 
     #left-side {
-        width: 1fr;
+        width: 60%;
         min-width: 50;
     }
     #left-top {
         height: 1fr;
     }
-    #left-top ProfileSidebar {
-        width: 1fr;
-        min-width: 18;
-        max-width: 26;
+    #left-top #pane-sidebar {
+        width: 22;
+        min-width: 14;
     }
-    #left-top ResultsFeed {
-        width: 2fr;
+    #left-top #pane-feed {
+        width: 1fr;
         min-width: 30;
     }
-    #left-side LogPanel {
-        height: 1fr;
+    #pane-log {
+        height: 12;
+        min-height: 3;
     }
 
-    MainScreen DetailPanel {
-        width: 1fr;
-        min-width: 40;
+    #pane-detail {
+        width: 40%;
+        min-width: 30;
     }
     """
 
@@ -54,10 +55,13 @@ class MainScreen(Screen):
         with Horizontal(id="main-columns"):
             with Vertical(id="left-side"):
                 with Horizontal(id="left-top"):
-                    yield ProfileSidebar(profiles=self._profiles)
-                    yield ResultsFeed()
-                yield LogPanel()
-            yield DetailPanel()
+                    yield ProfileSidebar(profiles=self._profiles, id="pane-sidebar")
+                    yield VSplitter("pane-sidebar", "pane-feed", id="vsplit1")
+                    yield ResultsFeed(id="pane-feed")
+                yield HSplitter("left-top", "pane-log", id="hsplit1")
+                yield LogPanel(id="pane-log")
+            yield VSplitter("left-side", "pane-detail", id="vsplit2")
+            yield DetailPanel(id="pane-detail")
         yield StatusBar()
 
     def on_listing_selected(self, event: ListingSelected) -> None:
@@ -84,7 +88,7 @@ class MainScreen(Screen):
 
     async def on_data_updated(self, event: DataUpdated) -> None:
         feed = self.query_one(ResultsFeed)
-        await feed.update_listings(event.listings)
+        await feed.update_listings(event.listings, from_poll=True)
         self.query_one(ProfileSidebar).update_stats(event.profile_stats)
         self.query_one(StatusBar).set_new_count(sum(event.profile_stats.values()))
         self.query_one(DetailPanel).show_listing(feed.focused_listing)
