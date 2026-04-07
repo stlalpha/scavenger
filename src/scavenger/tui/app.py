@@ -145,6 +145,9 @@ class ScavengerApp(App):
         await self._db.init()
         await self._db.migrate()
         self._data_layer = DataLayer(self._db)
+        from scavenger.tui.widgets.thumbnail import ThumbnailCache
+        cache_path = Path(self._config.global_config.image_cache_path).expanduser()
+        ThumbnailCache(cache_dir=cache_path).evict()
 
     async def on_unmount(self) -> None:
         if hasattr(self, "_poll_timer"):

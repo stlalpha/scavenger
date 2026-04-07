@@ -1,3 +1,5 @@
+import os
+import time
 import pytest
 import respx
 import httpx
@@ -61,3 +63,21 @@ async def test_cache_hit_after_download(tmp_path):
     second = await cache.get(url)
     assert second == first
     assert respx.calls.call_count == 1  # only one download
+
+
+async def test_cache_eviction_removes_old_files(tmp_path):
+    cache = ThumbnailCache(cache_dir=tmp_path, max_age_days=0)
+    fake = tmp_path / "old_image.jpg"
+    fake.write_bytes(b"fake image")
+    old_time = time.time() - 86400 * 2
+    os.utime(fake, (old_time, old_time))
+    cache.evict()
+    assert not fake.exists()
+
+
+async def test_cache_eviction_keeps_recent_files(tmp_path):
+    cache = ThumbnailCache(cache_dir=tmp_path, max_age_days=30)
+    fake = tmp_path / "recent_image.jpg"
+    fake.write_bytes(b"fake image")
+    cache.evict()
+    assert fake.exists()

@@ -1,4 +1,5 @@
 import logging
+import time
 from pathlib import Path, PurePosixPath
 import httpx
 from scavenger.dedup import content_hash
@@ -7,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 PLACEHOLDER = "□"
 DEFAULT_CACHE_DIR = Path("~/.cache/scavenger/images").expanduser()
+DEFAULT_MAX_AGE_DAYS = 30
 
 
 def _ext_from_url(url: str) -> str:
@@ -17,9 +19,26 @@ def _ext_from_url(url: str) -> str:
 class ThumbnailCache:
     """Downloads and caches listing images. Returns Path or PLACEHOLDER string."""
 
-    def __init__(self, cache_dir: Path = DEFAULT_CACHE_DIR) -> None:
+    def __init__(
+        self,
+        cache_dir: Path = DEFAULT_CACHE_DIR,
+        max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+    ) -> None:
         self._cache_dir = cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._max_age_days = max_age_days
+
+    def evict(self) -> int:
+        """Remove cached images older than max_age_days. Returns count removed."""
+        cutoff = time.time() - (self._max_age_days * 86400)
+        removed = 0
+        for f in self._cache_dir.iterdir():
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed += 1
+        if removed:
+            logger.info("Evicted %d stale images from cache", removed)
+        return removed
 
     def _cache_path(self, url: str) -> Path:
         return self._cache_dir / f"{content_hash(url)}{_ext_from_url(url)}"
