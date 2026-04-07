@@ -47,3 +47,18 @@ async def test_poll_command_triggers_handler(server):
     await send_command(sock_path, {"command": "poll", "profile_id": "sony"})
     await asyncio.sleep(0.05)
     assert "sony" in called
+
+
+async def test_oversized_input_rejected(server):
+    srv, sock_path = server
+    reader, writer = await asyncio.open_unix_connection(str(sock_path))
+    writer.write(b"x" * 131072 + b"\n")
+    try:
+        await writer.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    response = await reader.readline()
+    writer.close()
+    await writer.wait_closed()
+    resp = json.loads(response)
+    assert resp["status"] == "error"

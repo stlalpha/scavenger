@@ -6,6 +6,7 @@ from typing import Callable, Awaitable
 
 logger = logging.getLogger(__name__)
 PollHandler = Callable[[str], Awaitable[None]]
+MAX_INPUT = 65536
 
 
 class SocketServer:
@@ -33,7 +34,8 @@ class SocketServer:
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self._path.exists():
             self._path.unlink()
-        self._server = await asyncio.start_unix_server(self._handle, path=str(self._path))
+        self._server = await asyncio.start_unix_server(self._handle, path=str(self._path), limit=MAX_INPUT * 2)
+        self._path.chmod(0o600)
 
     async def stop(self) -> None:
         if self._server:
@@ -44,15 +46,23 @@ class SocketServer:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            line = await reader.readline()
+            try:
+                line = await reader.readline()
+            except ValueError:
+                writer.write(json.dumps({"status": "error", "message": "request too large"}).encode() + b"\n")
+                await writer.drain()
+                return
             if not line:
                 return
-            try:
-                request = json.loads(line)
-            except json.JSONDecodeError:
-                response = {"status": "error", "message": "invalid JSON"}
+            if len(line) > MAX_INPUT:
+                response = {"status": "error", "message": "request too large"}
             else:
-                response = await self._dispatch(request)
+                try:
+                    request = json.loads(line)
+                except json.JSONDecodeError:
+                    response = {"status": "error", "message": "invalid JSON"}
+                else:
+                    response = await self._dispatch(request)
             writer.write(json.dumps(response).encode() + b"\n")
             await writer.drain()
         except Exception as e:
