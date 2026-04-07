@@ -16,6 +16,7 @@ class GlobalConfig(BaseModel):
     log_level: str = "INFO"
     socket_path: str = "~/.run/scavenger/daemon.sock"
     home_zip: str | None = None
+    tui_refresh_sec: float = 2.0
 
 
 class AppConfig(BaseModel):
@@ -110,7 +111,7 @@ def _profile_to_entry(profile: Profile) -> dict:
         entry["price_min"] = profile.price_min
     if profile.price_max is not None:
         entry["price_max"] = profile.price_max
-    if profile.poll_interval_sec != 900:
+    if profile.poll_interval_sec != 3600:
         entry["poll_interval_sec"] = profile.poll_interval_sec
     if profile.alert_priority != "normal":
         entry["alert_priority"] = profile.alert_priority
@@ -167,5 +168,8 @@ def delete_profile(path: Path, profile_id: str) -> None:
 
     data = _read_config_data(path)
     existing = data.get("profiles", [])
-    data["profiles"] = [p for p in existing if p.get("id") != profile_id]
+    filtered = [p for p in existing if p.get("id") != profile_id]
+    if len(filtered) == len(existing):
+        raise ConfigError(f"Profile not found: {profile_id}")
+    data["profiles"] = filtered
     path.write_text(tomli_w.dumps(data))

@@ -41,6 +41,13 @@ def test_socket_path_is_expanded():
     assert not str(config.socket_path).startswith("~")
     assert config.socket_path.is_absolute()
 
+def test_delete_nonexistent_profile_raises(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[[profiles]]\nid = "p1"\nname = "Test"\nkeywords = ["test"]\nnegative_keywords = []\nsources = ["ebay"]\n')
+    from scavenger.config import delete_profile
+    with pytest.raises(ConfigError, match="not found"):
+        delete_profile(cfg, "nonexistent")
+
 def test_global_defaults_when_no_global_section(tmp_path):
     cfg = tmp_path / "minimal.toml"
     cfg.write_text('[[profiles]]\nid = "p1"\nname = "Test"\nkeywords = ["test"]\nnegative_keywords = []\nsources = ["ebay"]\n')
