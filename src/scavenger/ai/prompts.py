@@ -7,9 +7,9 @@ def build_prompt(profile: Profile, listing: Listing) -> tuple[str, str]:
         kw if isinstance(kw, str) else " or ".join(kw)
         for kw in profile.keywords
     )
-    if profile.price_max and profile.price_min is not None:
+    if profile.price_min is not None and profile.price_max is not None:
         price_range = f"${profile.price_min:.0f} – ${profile.price_max:.0f}"
-    elif profile.price_max:
+    elif profile.price_max is not None:
         price_range = f"up to ${profile.price_max:.0f}"
     elif profile.price_min is not None:
         price_range = f"${profile.price_min:.0f} and above"
@@ -91,9 +91,9 @@ def build_batch_prompt(profile: Profile, listings: list[Listing]) -> tuple[str, 
         kw if isinstance(kw, str) else " or ".join(kw)
         for kw in profile.keywords
     )
-    if profile.price_max and profile.price_min is not None:
+    if profile.price_min is not None and profile.price_max is not None:
         price_range = f"${profile.price_min:.0f} – ${profile.price_max:.0f}"
-    elif profile.price_max:
+    elif profile.price_max is not None:
         price_range = f"up to ${profile.price_max:.0f}"
     elif profile.price_min is not None:
         price_range = f"${profile.price_min:.0f} and above"

@@ -84,3 +84,56 @@ def test_fixture_is_valid_ai_evaluation():
     ev = AIEvaluation(**data)
     assert ev.relevant is True
     assert ev.notable is not None
+
+
+# --- price range branch coverage ---
+
+def _make_profile(**overrides):
+    from scavenger.models import Profile
+    defaults = dict(
+        id="p1", name="Test", keywords=["test"],
+        negative_keywords=[], sources=["ebay"],
+    )
+    defaults.update(overrides)
+    return Profile(**defaults)
+
+
+def _make_listing():
+    from scavenger.models import Listing
+    now = datetime.now(timezone.utc)
+    return Listing(
+        id="x", profile_id="p1", source_id="ebay", title="Test",
+        url="https://test.com", first_seen=now, last_seen=now,
+        relevance_score=50.0, price=100.0,
+    )
+
+
+def test_price_range_with_both_bounds():
+    profile = _make_profile(price_min=50.0, price_max=500.0)
+    system, _ = build_prompt(profile, _make_listing())
+    assert "$50" in system and "$500" in system
+
+
+def test_price_range_max_only():
+    profile = _make_profile(price_max=500.0)
+    system, _ = build_prompt(profile, _make_listing())
+    assert "up to $500" in system
+
+
+def test_price_range_min_only():
+    profile = _make_profile(price_min=50.0)
+    system, _ = build_prompt(profile, _make_listing())
+    assert "$50 and above" in system
+
+
+def test_price_range_neither():
+    profile = _make_profile()
+    system, _ = build_prompt(profile, _make_listing())
+    assert "any price" in system
+
+
+def test_batch_price_range_with_both_bounds():
+    from scavenger.ai.prompts import build_batch_prompt
+    profile = _make_profile(price_min=50.0, price_max=500.0)
+    system, _ = build_batch_prompt(profile, [_make_listing()])
+    assert "$50" in system and "$500" in system
