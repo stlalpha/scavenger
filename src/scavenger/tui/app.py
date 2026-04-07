@@ -342,10 +342,20 @@ class ScavengerApp(App):
 
     async def _fix_blocks(self, urls: list[str]) -> None:
         """Kill headless Chrome, start visible with blocked URLs, user fixes, then restart headless."""
+        import shutil
         import subprocess
+        import sys
         CDP_PORT = 9222
-        CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         CHROME_DATA = "/tmp/scavenger-chrome"
+
+        if sys.platform == "darwin":
+            chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        else:
+            chrome = shutil.which("google-chrome-stable") or shutil.which("google-chrome") or shutil.which("chromium")
+
+        if not chrome:
+            self.notify("Chrome not found — install Google Chrome or set it in PATH", severity="error")
+            return
 
         # Kill headless Chrome
         await asyncio.to_thread(
@@ -356,7 +366,7 @@ class ScavengerApp(App):
 
         # Start visible Chrome with same data dir + blocked URLs
         await asyncio.create_subprocess_exec(
-            CHROME,
+            chrome,
             f"--remote-debugging-port={CDP_PORT}",
             f"--user-data-dir={CHROME_DATA}",
             "--no-first-run", "--disable-default-apps",
