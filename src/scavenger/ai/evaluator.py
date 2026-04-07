@@ -231,9 +231,10 @@ class AIEvaluator:
             results: dict[str, AIEvaluation] = {}
             for item in parsed:
                 try:
-                    listing_id = item.pop("id", None)
+                    listing_id = item.get("id")
                     if listing_id:
-                        results[listing_id] = AIEvaluation(**item)
+                        eval_data = {k: v for k, v in item.items() if k != "id"}
+                        results[listing_id] = AIEvaluation(**eval_data)
                 except Exception as e:
                     logger.debug("AI batch: skipping malformed item: %s", e)
             for listing in listings:
