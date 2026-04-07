@@ -1,6 +1,7 @@
 import re
 import logging
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
 
 from scavenger.dedup import content_hash
 from scavenger.models import Listing, Profile
@@ -58,7 +59,7 @@ class EbayPlugin:
         page = await new_page()
         try:
             params = (
-                f"?_nkw={keywords.replace(' ', '+')}"
+                f"?_nkw={quote_plus(keywords)}"
                 "&_sop=10"    # sort: newly listed
                 "&_ipg=50"    # 50 per page
             )
