@@ -69,6 +69,61 @@ def _kw_to_str(keywords: list[str | list[str]]) -> str:
     return ", ".join(parts)
 
 
+class ConfirmDialog(ModalScreen[bool]):
+    """Simple yes/no confirmation dialog."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("y", "confirm", "Yes"),
+        Binding("n", "cancel", "No"),
+    ]
+
+    DEFAULT_CSS = """
+    ConfirmDialog {
+        align: center middle;
+    }
+    #confirm-box {
+        width: 48;
+        height: auto;
+        background: $surface;
+        border: double #f92672;
+        padding: 1 2;
+    }
+    #confirm-msg {
+        width: 100%;
+        text-align: center;
+        margin-bottom: 1;
+    }
+    #confirm-buttons {
+        height: auto;
+        align: center middle;
+    }
+    #confirm-buttons Button {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box"):
+            yield Static(self._message, id="confirm-msg")
+            with Horizontal(id="confirm-buttons"):
+                yield Button("Yes", variant="error", id="btn-yes")
+                yield Button("No", variant="default", id="btn-no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "btn-yes")
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class ProfileFormScreen(ModalScreen[dict | None]):
     """Modal form to create or edit a search profile.
 
@@ -248,7 +303,7 @@ class ProfileFormScreen(ModalScreen[dict | None]):
                             yield Static("Poll every", classes="fl")
                             yield Select(
                                 POLL_OPTIONS,
-                                value=str(p.poll_interval_sec) if editing else "900",
+                                value=str(p.poll_interval_sec) if editing else "3600",
                                 id="select-poll-interval",
                             )
                         with Vertical(classes="half"):
@@ -310,7 +365,15 @@ class ProfileFormScreen(ModalScreen[dict | None]):
     def _confirm_delete(self) -> None:
         if not self._editing:
             return
-        self.dismiss({"_action": "delete", "id": self._editing.id, "name": self._editing.name})
+        name = self._editing.name
+        self.app.push_screen(
+            ConfirmDialog(f"Delete profile '{name}' and all its listings?"),
+            callback=self._on_delete_confirmed,
+        )
+
+    def _on_delete_confirmed(self, confirmed: bool) -> None:
+        if confirmed and self._editing:
+            self.dismiss({"_action": "delete", "id": self._editing.id, "name": self._editing.name})
 
     def _do_suggest(self) -> None:
         name = self.query_one("#input-name", Input).value.strip()
