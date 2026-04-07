@@ -3,51 +3,12 @@ import os
 import re
 
 from scavenger.models import Profile
+from scavenger.util import extract_json
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.widgets import Static, Input, Checkbox, Button, Select
 from textual.binding import Binding
-
-def _extract_json(text: str) -> str:
-    """Extract the first JSON object from model output, ignoring fences and trailing text."""
-    text = text.strip()
-    # Strip opening fence
-    if text.startswith("```"):
-        nl = text.find("\n")
-        if nl != -1:
-            text = text[nl + 1:]
-    # Strip closing fence
-    if text.rstrip().endswith("```"):
-        text = text[: text.rfind("```")]
-    text = text.strip()
-    # Find the first { and its matching }
-    start = text.find("{")
-    if start == -1:
-        return text
-    depth = 0
-    in_str = False
-    escape = False
-    for i, ch in enumerate(text[start:], start):
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return text[start:]
-
 
 PRIORITY_OPTIONS = [("High", "high"), ("Normal", "normal"), ("Low", "low")]
 POLL_OPTIONS = [
@@ -488,7 +449,7 @@ If the user has already entered values for some fields, improve and expand on th
                 timeout=30.0,
             )
             content = response.choices[0].message.content
-            suggestions = _json.loads(_extract_json(content))
+            suggestions = _json.loads(extract_json(content))
         except Exception as e:
             self.notify(f"AI suggest failed: {type(e).__name__}: {e}", severity="error")
             return

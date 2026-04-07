@@ -10,6 +10,7 @@ from litellm import acompletion
 from scavenger.ai.models import AIConfig, AIEvaluation
 from scavenger.ai.prompts import build_prompt, build_batch_prompt, build_escalation_prompt
 from scavenger.models import Profile, Listing
+from scavenger.util import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -21,43 +22,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 BATCH_SIZE = 5  # smaller batches = fewer Ollama timeouts
 ESCALATION_DELAY = 1.0  # seconds between Anthropic calls to avoid rate limits
 MAX_ESCALATIONS_PER_BATCH = 5  # cap frontier calls per poll cycle
-
-
-def _extract_json(text: str) -> str:
-    """Extract the first JSON object from model output."""
-    text = text.strip()
-    if text.startswith("```"):
-        nl = text.find("\n")
-        if nl != -1:
-            text = text[nl + 1:]
-    if text.rstrip().endswith("```"):
-        text = text[: text.rfind("```")]
-    text = text.strip()
-    start = text.find("{")
-    if start == -1:
-        return text
-    depth = 0
-    in_str = False
-    escape = False
-    for i, ch in enumerate(text[start:], start):
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return text[start:]
 
 
 def _match_escalation_keywords(keywords: list[str], title: str, description: str) -> list[str]:
@@ -158,7 +122,7 @@ class AIEvaluator:
             max_tokens=1024,
             timeout=self._config.escalation_timeout_sec,
         )
-        content = _extract_json(response.choices[0].message.content)
+        content = extract_json(response.choices[0].message.content)
         logger.info("frontier response: %d chars, model=%s", len(content), response.model)
         return content
 
