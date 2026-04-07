@@ -142,7 +142,7 @@ class Daemon:
         }
 
     async def _handle_reload(self) -> None:
-        """Re-read config and register any new profiles."""
+        """Re-read config: add new profiles, update changed ones, remove deleted ones."""
         if not self._config_path:
             logger.warning("No config path — cannot reload")
             return
@@ -152,16 +152,31 @@ class Daemon:
         except Exception as e:
             logger.warning("Reload failed: %s", e)
             return
-        existing_ids = {p.id for p in self._config.profiles}
-        added = 0
+
+        new_profiles = {p.id: p for p in new_config.profiles if p.enabled}
+        old_ids = {p.id for p in self._config.profiles}
+
+        # Remove profiles no longer in config
+        for old_id in old_ids:
+            if old_id not in new_profiles:
+                self._scheduler.remove_profile(old_id)
+                logger.info("Removed profile: %s", old_id)
+
+        # Add or update profiles
         for profile in new_config.profiles:
-            if profile.id not in existing_ids and profile.enabled:
-                self._config.profiles.append(profile)
-                self._scheduler.add_profile(profile, callback=self._make_callback(profile))
-                added += 1
+            if not profile.enabled:
+                self._scheduler.remove_profile(profile.id)
+                continue
+            if profile.id in old_ids:
+                self._scheduler.remove_profile(profile.id)
+            self._scheduler.add_profile(profile, callback=self._make_callback(profile))
+            if profile.id not in old_ids:
                 logger.info("Loaded new profile: %s", profile.name)
-        if added:
-            logger.info("Reload: added %d new profile(s)", added)
+            else:
+                logger.info("Updated profile: %s", profile.name)
+
+        self._config = new_config
+        self._plugins = _make_plugins(new_config)
 
     async def _handle_poll_command(self, profile_id: str) -> None:
         profile = next((p for p in self._config.profiles if p.id == profile_id), None)
