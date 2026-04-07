@@ -10,7 +10,6 @@ from scavenger.tui.messages import DataUpdated
 from scavenger.tui.screens.main import MainScreen
 
 logger = logging.getLogger(__name__)
-POLL_INTERVAL = 2.0
 
 
 class ScavengerApp(App):
@@ -62,7 +61,9 @@ class ScavengerApp(App):
     def on_mount(self) -> None:
         self.push_screen(MainScreen(profiles=self._config.profiles))
         self.run_worker(self._poll(), exclusive=True)
-        self._poll_timer = self.set_interval(POLL_INTERVAL, self._poll)
+        self._poll_timer = self.set_interval(
+            self._config.global_config.tui_refresh_sec, self._poll
+        )
 
     async def _poll(self) -> None:
         if self._data_layer is None:
@@ -158,15 +159,11 @@ class ScavengerApp(App):
         self.exit()
 
     def action_quit_all(self) -> None:
-        import socket, json
-        try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(2.0)
-            s.connect(str(self._config.socket_path))
-            s.sendall(json.dumps({"command": "shutdown"}).encode() + b"\n")
-            s.close()
-        except Exception:
-            pass
+        async def _shutdown() -> None:
+            await asyncio.to_thread(
+                self._send_daemon_command, {"command": "shutdown"}
+            )
+        self.run_worker(_shutdown(), exclusive=False)
         self.exit()
 
     def action_focus_next_panel(self) -> None:
