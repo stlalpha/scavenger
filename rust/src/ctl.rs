@@ -63,6 +63,11 @@ pub fn cmd_list_profiles(config: &AppConfig) {
     }
 }
 
+pub fn daemon_alive(config: &AppConfig) -> bool {
+    let resp = send(&config.socket_path(), json!({"command": "status"}));
+    resp["status"] == "ok"
+}
+
 pub fn cmd_status(config: &AppConfig) {
     let resp = send(&config.socket_path(), json!({"command": "status"}));
     if resp["status"] == "ok" {

@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod chrome;
 pub mod config;
 pub mod ctl;
 pub mod daemon;
