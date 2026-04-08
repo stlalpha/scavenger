@@ -1,0 +1,1 @@
+// Resizable splitter widget

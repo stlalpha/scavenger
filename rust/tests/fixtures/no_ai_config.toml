@@ -1,0 +1,8 @@
+[global]
+log_level = "INFO"
+
+[[profiles]]
+id = "test"
+name = "Test Profile"
+keywords = ["test"]
+sources = ["ebay"]

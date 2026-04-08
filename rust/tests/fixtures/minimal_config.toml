@@ -1,0 +1,5 @@
+[[profiles]]
+id = "basic"
+name = "Basic"
+keywords = ["widget"]
+sources = ["ebay"]
