@@ -245,8 +245,8 @@ def test_card_no_unread_dot_for_saved_listing():
     assert "●" not in label
 
 
-def test_card_unread_dot_coexists_with_notable_star():
-    """A new listing with a notable AI evaluation should show both ● and ★."""
+def test_card_unread_dot_coexists_with_notable_marker():
+    """A new listing with a notable AI evaluation should show both ● and !."""
     now = datetime.now(timezone.utc)
     listing = Listing(
         id="u4", profile_id="p1", source_id="ebay",
@@ -257,4 +257,4 @@ def test_card_unread_dot_coexists_with_notable_star():
     )
     label = _card(listing)
     assert "●" in label
-    assert "★" in label
+    assert "!" in label

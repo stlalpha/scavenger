@@ -45,8 +45,7 @@ start_chrome() {
     )
     if [ "$mode" = "headless" ]; then
         bold "Starting Chrome..."
-        # Offscreen real Chrome — eBay detects --headless even with stealth
-        flags+=(--window-position=0,-10000 --window-size=1,1 --disable-blink-features=AutomationControlled)
+        flags+=(--headless=new --disable-blink-features=AutomationControlled --disable-gpu)
     else
         bold "Starting Chrome (visible)..."
     fi
@@ -162,28 +161,57 @@ cmd_tui() {
     exec uv run scavenger "$@"
 }
 
-# Check if a facebook tab is on a logged-in page (not /login)
-fb_tab_logged_in() {
-    curl -s "http://localhost:${CDP_PORT}/json/list" 2>/dev/null | python3 -c "
-import sys, json
-try:
-    tabs = json.load(sys.stdin)
-except: sys.exit(1)
-for t in tabs:
-    url = t.get('url', '')
-    if 'facebook.com' in url and '/login' not in url and '/recover' not in url:
-        sys.exit(0)
-sys.exit(1)
+# Check if Facebook session is actually logged in.
+# Uses Playwright via uv run to evaluate the real DOM — same browser session the daemon uses.
+fb_session_valid() {
+    uv run python3 -c "
+import sys, asyncio
+async def check():
+    from playwright.async_api import async_playwright
+    pw = await async_playwright().start()
+    try:
+        browser = await pw.chromium.connect_over_cdp('http://localhost:${CDP_PORT}', timeout=5000)
+        ctx = browser.contexts[0] if browser.contexts else None
+        if not ctx:
+            return False
+        # Find an existing facebook tab
+        for page in ctx.pages:
+            url = page.url
+            if 'facebook.com' not in url:
+                continue
+            if '/login' in url or '/recover' in url:
+                return False
+            # Check the DOM for login wall vs logged-in state
+            result = await page.evaluate('''() => {
+                if (document.querySelector('[data-testid=\"royal_login_form\"]')) return 'login';
+                if (document.querySelector('form[action*=\"/login\"]')) return 'login';
+                if (document.querySelector('#loginbutton')) return 'login';
+                if (document.querySelector('[aria-label=\"Your profile\"]')) return 'ok';
+                if (document.querySelector('[aria-label=\"Account\"]')) return 'ok';
+                if (document.querySelector('a[href*=\"/marketplace/item/\"]')) return 'ok';
+                if (document.querySelector('[role=\"navigation\"]')) return 'ok';
+                return 'unknown';
+            }''')
+            if result == 'ok':
+                return True
+            if result == 'login':
+                return False
+        return False
+    except Exception:
+        return False
+    finally:
+        await pw.stop()
+sys.exit(0 if asyncio.run(check()) else 1)
 " 2>/dev/null
 }
 
 # Open facebook and wait for the user to log in, polling until they do
 ensure_fb_login() {
-    # Quick check with headless Chrome — open facebook, see if it redirects to login
-    curl -s -X PUT "http://localhost:${CDP_PORT}/json/new?https://www.facebook.com/" >/dev/null
-    sleep 3
+    # Open facebook.com and give it time to follow redirects
+    curl -s -X PUT "http://localhost:${CDP_PORT}/json/new?https://www.facebook.com/marketplace/" >/dev/null
+    sleep 6
 
-    if fb_tab_logged_in; then
+    if fb_session_valid; then
         green "Facebook session active"
         return
     fi
@@ -201,7 +229,7 @@ ensure_fb_login() {
     dim "Waiting..."
     echo
 
-    while ! fb_tab_logged_in; do
+    while ! fb_session_valid; do
         sleep 2
     done
     green "Facebook login verified"

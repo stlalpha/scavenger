@@ -62,18 +62,22 @@ def _has_notable(listing: Listing) -> bool:
 def _card(listing: Listing) -> str:
     icons = {
         "new": "[bold #66d9ef]●[/]",
-        "seen": "[#3a3a3a]·[/]",
-        "saved": "[#a6e22e]★[/]",
-        "dismissed": "[#3a3a3a]✕[/]",
+        "seen": "[#444]·[/]",
+        "saved": "[bold #a6e22e]★[/]",
+        "dismissed": "[#333]✕[/]",
         "snoozed": "[#e6db74]◑[/]",
     }
     icon = icons.get(listing.status, " ")
-    notable = " [#f92672]★[/]" if _has_notable(listing) else ""
-    price = f"[bold #fd971f]${listing.price:,.0f}[/]" if listing.price else "[#3a3a3a]—[/]"
+    notable = " [bold #f92672]![/]" if _has_notable(listing) else ""
+    if listing.status in ("seen", "dismissed"):
+        title = f"[#777]{listing.title}[/]"
+    else:
+        title = f"[#f8f8f2]{listing.title}[/]"
+    price = f"[bold #fd971f]${listing.price:,.0f}[/]" if listing.price else "[#444]--[/]"
     clr = SRC_CLR.get(listing.source_id, "#75715e")
-    src = f"[{clr}]{listing.source_id[:2]}[/]"
-    age = f"[#75715e]{_age(listing.first_seen)}[/]"
-    return f"{icon}{notable} [#f8f8f2]{listing.title}[/]\n    {price} {src} {age}"
+    src = f"[{clr}]{listing.source_id[:2].upper()}[/]"
+    age = f"[#555]{_age(listing.first_seen)}[/]"
+    return f"{icon}{notable} {title}\n  {price}  {src}  {age}"
 
 
 class ResultsFeed(Widget):
@@ -91,27 +95,28 @@ class ResultsFeed(Widget):
         width: 100%;
         height: 100%;
         background: #1a1a1a;
-        border-left: solid #333;
     }
     ResultsFeed #feed-hdr {
         dock: top;
         height: 1;
         padding: 0 1;
-        background: #252525;
-        color: #75715e;
+        background: #1a1a1a;
+        color: #66d9ef;
+        text-style: bold;
     }
     ResultsFeed ListView {
         height: 1fr;
         background: transparent;
-        padding: 1 0;
+        padding: 0;
     }
     ResultsFeed ListView > ListItem {
         padding: 0 1;
         height: auto;
         background: transparent;
+        margin: 0 0 1 0;
     }
     ResultsFeed ListView > ListItem.--highlight {
-        background: #2a2a2a;
+        background: #252525;
     }
     """
 
@@ -127,7 +132,7 @@ class ResultsFeed(Widget):
         self._awaiting_poll: bool = True
 
     def compose(self) -> ComposeResult:
-        yield Static("╶ listings", id="feed-hdr")
+        yield Static(" LISTINGS", id="feed-hdr")
         yield ListView()
 
     @property
@@ -173,13 +178,13 @@ class ResultsFeed(Widget):
         sort_label = f"[#3a3a3a]{dict(SORT_LABELS)[self._sort_key]}[/]"
         nc = sum(1 for l in listings if l.status == "new")
         if nc > 0:
-            hdr.update(f"╶ listings [bold #66d9ef]{nc} new[/] {sort_label}")
+            hdr.update(f" LISTINGS [bold #f8f8f2]{nc} new[/] {sort_label}")
         elif listings:
-            hdr.update(f"╶ listings [#75715e]{len(listings)}[/] {sort_label}")
+            hdr.update(f" LISTINGS [#555]{len(listings)}[/] {sort_label}")
         elif self._awaiting_poll:
-            hdr.update("╶ listings [#fd971f]polling…[/]")
+            hdr.update(" LISTINGS [#fd971f]polling...[/]")
         else:
-            hdr.update("╶ listings [#75715e]empty[/]")
+            hdr.update(" LISTINGS [#555]empty[/]")
 
     def has_notable(self, listing_id: str) -> bool:
         return any(_has_notable(l) for l in self._listings if l.id == listing_id)

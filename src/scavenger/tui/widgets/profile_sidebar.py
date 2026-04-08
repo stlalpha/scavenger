@@ -16,15 +16,15 @@ class ProfileSidebar(Widget):
     ProfileSidebar {
         width: 100%;
         height: 100%;
-        background: #1e1e1e;
-        border-right: solid #333;
+        background: #1c1c1c;
     }
     ProfileSidebar #sidebar-hdr {
         dock: top;
         height: 1;
         padding: 0 1;
-        background: #252525;
-        color: #75715e;
+        background: #1c1c1c;
+        color: #a6e22e;
+        text-style: bold;
     }
     ProfileSidebar ListView {
         height: 1fr;
@@ -37,18 +37,18 @@ class ProfileSidebar(Widget):
         background: transparent;
     }
     ProfileSidebar ListView > ListItem.--highlight {
-        background: #2a2a2a;
+        background: #272727;
     }
     """
 
-    def __init__(self, profiles: list[Profile]) -> None:
-        super().__init__()
+    def __init__(self, profiles: list[Profile], **kwargs) -> None:
+        super().__init__(**kwargs)
         self._profiles = profiles
         self._stats: dict[str, int] = {}
         self._daemon_profiles: set[str] = set()
 
     def compose(self) -> ComposeResult:
-        yield Static("╶ profiles", id="sidebar-hdr")
+        yield Static(" PROFILES", id="sidebar-hdr")
         yield ListView(*[
             ListItem(Label(self._label(p)), id=f"profile-{p.id}")
             for p in self._profiles

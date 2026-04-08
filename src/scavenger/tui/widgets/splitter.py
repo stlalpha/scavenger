@@ -8,15 +8,18 @@ class VSplitter(Widget):
 
     can_focus = False
 
+    def render(self) -> str:
+        return ""
+
     DEFAULT_CSS = """
     VSplitter {
         width: 1;
         max-width: 1;
         height: 100%;
-        background: #333;
+        background: #222;
     }
     VSplitter:hover {
-        background: #fd971f;
+        background: #555;
     }
     VSplitter.-dragging {
         background: #fd971f;
@@ -79,15 +82,18 @@ class HSplitter(Widget):
 
     can_focus = False
 
+    def render(self) -> str:
+        return ""
+
     DEFAULT_CSS = """
     HSplitter {
         height: 1;
         max-height: 1;
         width: 100%;
-        background: #333;
+        background: #222;
     }
     HSplitter:hover {
-        background: #fd971f;
+        background: #555;
     }
     HSplitter.-dragging {
         background: #fd971f;

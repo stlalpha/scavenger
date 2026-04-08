@@ -71,7 +71,11 @@ class FacebookPlugin:
 
             title = await page.title()
             current_url = page.url
-            if "log in" in title.lower() or "sign in" in title.lower():
+            if (
+                "log in" in title.lower()
+                or "sign in" in title.lower()
+                or "/login" in current_url
+            ):
                 raise BotDetectedError("facebook", "https://www.facebook.com/login", "Facebook not logged in")
 
             # Detect redirect to main feed instead of marketplace

@@ -56,6 +56,20 @@ google-chrome-stable --remote-debugging-port=9222 --user-data-dir=/tmp/scavenger
 - `pytest-asyncio` for async fixture/test support
 - No Playwright in tests — plugin tests mock at the HTTP/page level
 
+## Code Graph Tools
+
+The `code-graph-mcp` plugin is available. Prefer these over multi-step grep/read when exploring:
+
+- **"who calls X?"** → `get_call_graph` (not grep for the function name)
+- **"what breaks if I change X?"** → `impact_analysis` (before editing)
+- **"how is module Y structured?"** → `module_overview` (not reading files one by one)
+- **"find code that does Z"** (concept) → `semantic_code_search` (not grep)
+- **"find all functions returning T"** → `ast_search` with filters
+- **"is this function used?"** → `find_references`
+- **architecture overview** → `project_map`
+
+Still use Grep for: exact strings, constants, regex, non-code files. Still use Read for: a specific file you're about to edit.
+
 ## Key Conventions
 
 - Listing IDs are content hashes of the URL (`dedup.content_hash`)

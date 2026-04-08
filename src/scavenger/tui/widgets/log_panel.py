@@ -20,32 +20,32 @@ class LogPanel(Widget):
     LogPanel {
         width: 100%;
         height: 100%;
-        background: #1a1a1a;
-        border-top: solid #333;
+        background: #181818;
     }
     LogPanel #log-hdr {
         dock: top;
         height: 1;
         padding: 0 1;
-        background: #252525;
+        background: #181818;
         color: #75715e;
+        text-style: bold;
     }
     LogPanel RichLog {
         height: 1fr;
         padding: 0 1;
-        background: #1a1a1a;
+        background: #181818;
         scrollbar-size: 1 1;
     }
     """
 
-    def __init__(self, log_path: Path = DEFAULT_LOG) -> None:
-        super().__init__()
+    def __init__(self, log_path: Path = DEFAULT_LOG, **kwargs) -> None:
+        super().__init__(**kwargs)
         self._log_path = log_path
         self._tail_task: asyncio.Task | None = None
         self._last_size: int = 0
 
     def compose(self) -> ComposeResult:
-        yield Static("╶ log", id="log-hdr")
+        yield Static(" LOG", id="log-hdr")
         yield RichLog(highlight=False, markup=True, wrap=True, max_lines=MAX_LINES, id="log-out")
 
     def on_mount(self) -> None:

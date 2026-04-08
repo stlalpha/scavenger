@@ -39,10 +39,23 @@ class Daemon:
         self._active_polls: set[str] = set()  # source_ids currently being polled
         self._bot_blocks: dict[str, str] = {}  # plugin_id -> url needing manual verification
 
-    def _register_profiles(self) -> None:
+    async def _register_profiles(self) -> None:
         for profile in self._config.profiles:
-            if profile.enabled:
-                self._scheduler.add_profile(profile, callback=self._make_callback(profile))
+            if not profile.enabled:
+                continue
+            # Find the most recent poll time across this profile's sources
+            last_polled = None
+            for source_id in profile.sources:
+                state = await self._db.get_source_state(source_id)
+                if state and state.get("last_polled"):
+                    ts = datetime.fromisoformat(state["last_polled"])
+                    if last_polled is None or ts > last_polled:
+                        last_polled = ts
+            self._scheduler.add_profile(
+                profile,
+                callback=self._make_callback(profile),
+                last_polled=last_polled,
+            )
 
     def _make_callback(self, profile: Profile):
         async def callback(p: Profile) -> list[Listing]:
@@ -124,7 +137,7 @@ class Daemon:
         self._socket_server.register_reload_handler(self._handle_reload)
         self._socket_server.register_shutdown_handler(stop_event.set)
         await self._socket_server.start()
-        self._register_profiles()
+        await self._register_profiles()
         logger.info(
             "Daemon started — socket: %s, profiles: %d",
             self._config.socket_path,

@@ -23,7 +23,7 @@ class StatusBar(Widget):
         height: 1;
         max-height: 1;
         overflow: hidden;
-        background: #252525;
+        background: #111;
         color: #75715e;
         padding: 0 1;
     }
@@ -38,8 +38,10 @@ class StatusBar(Widget):
         self._last_ts: datetime | None = None
         self._sources: list[dict] = []
         self._active: list[str] = []
+        self._poll_interval: int = 0
         self._si: int = 0
         self._st: Timer | None = None
+        self._last_text: str = ""
 
     def compose(self) -> ComposeResult:
         yield Static(self._left(), id="st-l")
@@ -80,25 +82,32 @@ class StatusBar(Widget):
             p.append(f"[bold #66d9ef]{self.new_count}[/] [#75715e]new[/]")
 
         if self._last_ts:
-            p.append(f"[#3a3a3a]{self._last_ts.astimezone().strftime('%H:%M')}[/]")
+            ago = int((datetime.now(timezone.utc) - self._last_ts).total_seconds())
+            p.append(f"[#3a3a3a]last {_age(ago)} ago[/]")
+            if self._poll_interval > 0 and not self._active:
+                remaining = max(0, self._poll_interval - ago)
+                if remaining > 0:
+                    p.append(f"[#3a3a3a]next {_age(remaining)}[/]")
+                else:
+                    p.append("[#fd971f]due[/]")
 
         return " " + " [#3a3a3a]·[/] ".join(p)
 
     def _right(self) -> str:
         return (
-            "[#3a3a3a]"
-            "a[#75715e]dd[/] "
-            "e[#75715e]dit[/] "
-            "r[#75715e]epoll[/] "
-            "x[#75715e]fix[/] "
-            "?[#75715e]help[/] "
-            "q[#75715e]uit[/]"
-            "[/]"
+            "[#fd971f]a[/][#555]dd[/] "
+            "[#fd971f]e[/][#555]dit[/] "
+            "[#fd971f]r[/][#555]epoll[/] "
+            "[#fd971f]?[/][#555]help[/] "
+            "[#fd971f]q[/][#555]uit[/]"
         )
 
     def _refresh(self) -> None:
         try:
-            self.query_one("#st-l", Static).update(self._left())
+            text = self._left()
+            if text != self._last_text:
+                self._last_text = text
+                self.query_one("#st-l", Static).update(text)
         except Exception:
             pass
 
@@ -125,6 +134,9 @@ class StatusBar(Widget):
     def set_source_states(self, states: list[dict]) -> None:
         self._sources = states
         self._refresh()
+
+    def set_poll_interval(self, interval_sec: int) -> None:
+        self._poll_interval = interval_sec
 
     def set_new_count(self, count: int) -> None:
         self.new_count = count

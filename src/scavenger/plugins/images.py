@@ -15,19 +15,26 @@ _CL_IMG_RE = re.compile(r'https://images\.craigslist\.org/[a-zA-Z0-9_]+_\d+x\d+\
 # Facebook embeds scontent URLs
 _FB_IMG_RE = re.compile(r'"(https://scontent[^"]+)"')
 
+_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=_HEADERS)
+    return _client
+
 
 async def fetch_listing_images(url: str, source_id: str) -> list[str]:
     """Fetch a listing page and extract all product image URLs."""
     if not url or not url.startswith("http"):
         return []
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-            })
-            if resp.status_code != 200:
-                return []
-            html = resp.text
+        resp = await _get_client().get(url)
+        if resp.status_code != 200:
+            return []
+        html = resp.text
     except Exception as e:
         logger.debug("Image fetch failed for %s: %s", url[:60], e)
         return []

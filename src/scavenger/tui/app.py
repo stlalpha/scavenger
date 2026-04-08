@@ -17,13 +17,12 @@ class ScavengerApp(App):
 
     CSS = """
     Screen {
-        background: #1a1a1a;
+        background: #161616;
     }
-    /* Monokai-dark palette as the base */
     * {
-        scrollbar-background: #1a1a1a;
-        scrollbar-color: #3a3a3a;
-        scrollbar-color-hover: #555;
+        scrollbar-background: #161616;
+        scrollbar-color: #2a2a2a;
+        scrollbar-color-hover: #444;
         scrollbar-color-active: #fd971f;
         scrollbar-size: 1 1;
     }
@@ -88,6 +87,11 @@ class ScavengerApp(App):
                 bar.set_source_states(source_states)
                 if last_source_poll:
                     bar.set_last_poll(last_source_poll)
+                active_profile = next(
+                    (p for p in self._config.profiles if p.id == self._active_profile_id), None
+                )
+                if active_profile:
+                    bar.set_poll_interval(active_profile.poll_interval_sec)
             except Exception:
                 pass
             # Show which profiles the daemon knows about
@@ -382,5 +386,5 @@ class ScavengerApp(App):
 
     def action_show_help(self) -> None:
         self.notify(
-            "j/k ↑↓ navigate  o open  s save  d dismiss  n snooze  a add  r repoll  q quit"
+            "j/k ↑↓ navigate  o open  s save  d dismiss  n snooze  S sort  a add  r repoll  q quit"
         )

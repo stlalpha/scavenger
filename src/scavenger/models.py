@@ -30,7 +30,7 @@ class Profile(BaseModel):
     sources: list[str]
     price_min: float | None = None
     price_max: float | None = None
-    poll_interval_sec: int = 900
+    poll_interval_sec: int = 3600
     alert_priority: Literal["high", "normal", "low"] = "normal"
     enabled: bool = True
     tags: list[str] = []

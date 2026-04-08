@@ -31,7 +31,7 @@ def test_profile_keyword_structure():
         negative_keywords=["broken"],
         sources=["ebay"],
     )
-    assert profile.poll_interval_sec == 900
+    assert profile.poll_interval_sec == 3600
     assert profile.enabled is True
     assert profile.alert_priority == "normal"
 

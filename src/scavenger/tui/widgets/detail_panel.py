@@ -34,53 +34,52 @@ def _render(listing: Listing, img_index: int = 0, img_total: int = 0) -> str:
     clr = SRC_CLR.get(listing.source_id, "#75715e")
     src = f"[{clr} bold]{listing.source_id.upper()}[/]"
     status = STATUS_LABEL.get(listing.status, listing.status)
-    price = f"[bold #fd971f]${listing.price:,.2f}[/]" if listing.price else "[#75715e]no price[/]"
+    price = f"[bold #fd971f]${listing.price:,.2f}[/]" if listing.price else "[#555]no price[/]"
 
     lines = [
         f"[bold #f8f8f2]{listing.title}[/]",
         "",
-        f"  {price}  {src}  {status}",
+        f"{price}  {src}  {status}",
     ]
 
     if listing.location:
-        lines.append(f"  [#75715e]{listing.location}[/]")
+        lines.append(f"[#75715e]{listing.location}[/]")
 
     lines.append("")
-    lines.append(f"  [#75715e underline]{listing.url}[/]")
+    lines.append(f"[#555 underline]{listing.url}[/]")
 
     if listing.ai_evaluation:
         try:
             ev = json.loads(listing.ai_evaluation)
             if ev.get("notable") or ev.get("reason"):
                 lines.append("")
-                lines.append("[#f92672]╶─── ai insight ───╴[/]")
+                lines.append("[#f92672 bold]AI INSIGHT[/]")
                 if ev.get("notable"):
-                    lines.append(f"  [#f92672]★[/] [#f8f8f2]{ev['notable']}[/]")
+                    lines.append(f"[bold #f92672]![/] [#f8f8f2]{ev['notable']}[/]")
                 if ev.get("reason"):
-                    lines.append(f"  [#75715e]{ev['reason']}[/]")
+                    lines.append(f"[#888]{ev['reason']}[/]")
         except Exception:
             pass
 
     if listing.description:
         lines.append("")
-        lines.append(f"[#75715e]{listing.description}[/]")
+        lines.append(f"[#888]{listing.description}[/]")
 
     lines.append("")
 
-    # Image nav hint
     if img_total > 1:
-        nav = f"[#75715e]\\[<][/][#f8f8f2] {img_index + 1}/{img_total} [/][#75715e]\\[>][/]  "
+        nav = f"[#555]<[/] [#f8f8f2]{img_index + 1}/{img_total}[/] [#555]>[/]  "
     elif img_total == 1:
-        nav = "[#3a3a3a]1/1[/]  "
+        nav = "[#444]1/1[/]  "
     else:
         nav = ""
 
     lines.append(
-        f"[#3a3a3a]╶[/] {nav}"
-        "[#75715e]\\[o][/][#f8f8f2]open[/]  "
-        "[#75715e]\\[s][/][#f8f8f2]save[/]  "
-        "[#75715e]\\[d][/][#f8f8f2]dismiss[/]  "
-        "[#75715e]\\[n][/][#f8f8f2]snooze[/]"
+        f"{nav}"
+        "[#fd971f]o[/][#75715e]pen[/]  "
+        "[#fd971f]s[/][#75715e]ave[/]  "
+        "[#fd971f]d[/][#75715e]ism[/]  "
+        "[#fd971f]n[/][#75715e]ap[/]"
     )
 
     return "\n".join(lines)
@@ -103,17 +102,17 @@ class DetailPanel(Widget):
         width: 100%;
         height: 100%;
         background: #1e1e1e;
-        border-left: solid #333;
     }
     DetailPanel #detail-hdr {
         dock: top;
         height: 1;
         padding: 0 1;
-        background: #252525;
-        color: #75715e;
+        background: #1e1e1e;
+        color: #fd971f;
+        text-style: bold;
     }
     DetailPanel VerticalScroll { height: 1fr; padding: 1 2; }
-    DetailPanel #hero-image { height: 15; width: auto; }
+    DetailPanel #hero-image { height: 18; width: auto; }
     DetailPanel #detail-content { width: 100%; padding: 1 0; }
     """
 
@@ -126,7 +125,7 @@ class DetailPanel(Widget):
         self._pending_scrape_id: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("╶ detail", id="detail-hdr")
+        yield Static(" DETAIL", id="detail-hdr")
         with VerticalScroll():
             if HAS_IMAGE_WIDGET:
                 yield KittyImage("", id="hero-image")
@@ -157,11 +156,11 @@ class DetailPanel(Widget):
         hdr = self.query_one("#detail-hdr", Static)
         if listing is None:
             content.update("[#75715e italic]  select a listing[/]")
-            hdr.update("╶ detail")
+            hdr.update(" DETAIL")
             self._clear_image()
             return
         clr = SRC_CLR.get(listing.source_id, "#75715e")
-        hdr.update(f"╶ detail [{clr}]{listing.source_id}[/]")
+        hdr.update(f" DETAIL [{clr}]{listing.source_id.upper()}[/]")
 
         # Clear stale image immediately before loading new one
         self._clear_image()
@@ -261,8 +260,15 @@ class DetailPanel(Widget):
         if not self._listing:
             return
         import subprocess, sys
-        opener = "open" if sys.platform == "darwin" else "xdg-open"
-        subprocess.Popen([opener, self._listing.url])
+        if sys.platform == "darwin":
+            # Force a new Chrome window in the default profile, not the
+            # scraping session running with --user-data-dir
+            subprocess.Popen([
+                "open", "-na", "Google Chrome",
+                "--args", "--profile-directory=Default", self._listing.url,
+            ])
+        else:
+            subprocess.Popen(["xdg-open", self._listing.url])
 
     def action_save_listing(self) -> None:
         self._mark_status("saved")

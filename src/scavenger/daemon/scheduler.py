@@ -30,16 +30,39 @@ class PollScheduler:
         self._scheduler.shutdown(wait=False)
         self._running = False
 
-    def add_profile(self, profile: Profile, callback: PollCallback) -> None:
+    def add_profile(
+        self,
+        profile: Profile,
+        callback: PollCallback,
+        last_polled: datetime | None = None,
+    ) -> None:
         if not profile.enabled:
             return
         self._callbacks[profile.id] = callback
         self._profiles[profile.id] = profile
         interval = int(profile.poll_interval_sec * (1 + random.uniform(-0.1, 0.1)))
+
+        # If we polled recently, schedule the next run at the proper time
+        now = datetime.now(timezone.utc)
+        if last_polled is not None:
+            from datetime import timedelta
+            next_run = last_polled + timedelta(seconds=interval)
+            if next_run > now:
+                logger.info(
+                    "Profile %s: last polled %ds ago, next in %ds",
+                    profile.id,
+                    int((now - last_polled).total_seconds()),
+                    int((next_run - now).total_seconds()),
+                )
+            else:
+                next_run = now
+        else:
+            next_run = now
+
         self._scheduler.add_job(
             self._run_poll, "interval", seconds=interval,
             args=[profile.id], id=profile.id, replace_existing=True,
-            next_run_time=datetime.now(timezone.utc),
+            next_run_time=next_run,
         )
 
     def remove_profile(self, profile_id: str) -> None:

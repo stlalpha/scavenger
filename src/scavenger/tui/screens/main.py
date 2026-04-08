@@ -15,7 +15,7 @@ class MainScreen(Screen):
     DEFAULT_CSS = """
     MainScreen {
         layout: vertical;
-        background: #1a1a1a;
+        background: #161616;
     }
     MainScreen #main-columns {
         height: 1fr;
@@ -29,15 +29,15 @@ class MainScreen(Screen):
         height: 1fr;
     }
     #left-top #pane-sidebar {
-        width: 22;
-        min-width: 14;
+        width: 24;
+        min-width: 16;
     }
     #left-top #pane-feed {
         width: 1fr;
         min-width: 30;
     }
     #pane-log {
-        height: 12;
+        height: 10;
         min-height: 3;
     }
 

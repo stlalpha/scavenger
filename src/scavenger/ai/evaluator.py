@@ -19,9 +19,9 @@ logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 logging.getLogger("LiteLLM Router").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-BATCH_SIZE = 5  # smaller batches = fewer Ollama timeouts
+BATCH_SIZE = 10
 ESCALATION_DELAY = 1.0  # seconds between Anthropic calls to avoid rate limits
-MAX_ESCALATIONS_PER_BATCH = 5  # cap frontier calls per poll cycle
+NUM_WORKERS = 3
 
 
 def _match_escalation_keywords(keywords: list[str], title: str, description: str) -> list[str]:
@@ -67,15 +67,18 @@ class AIEvaluator:
         # Anthropic model for escalation
         self._escalation_model = f"anthropic/{config.escalation_model}"
         self._queue: asyncio.Queue[_EvalJob | None] = asyncio.Queue()
-        self._worker_task: asyncio.Task | None = None
+        self._worker_tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
-        self._worker_task = asyncio.create_task(self._worker())
+        self._worker_tasks = [
+            asyncio.create_task(self._worker()) for _ in range(NUM_WORKERS)
+        ]
 
     async def stop(self) -> None:
-        await self._queue.put(None)
-        if self._worker_task:
-            await self._worker_task
+        for _ in self._worker_tasks:
+            await self._queue.put(None)
+        for task in self._worker_tasks:
+            await task
 
     async def _worker(self) -> None:
         while True:
@@ -170,17 +173,17 @@ class AIEvaluator:
             future = loop.create_future()
             futures.append(future)
             await self._queue.put(_EvalJob(profile=profile, listings=chunk, future=future))
-        for future in futures:
-            chunk_results = await future
-            all_results.update(chunk_results)
+        done = await asyncio.gather(*futures, return_exceptions=True)
+        for result in done:
+            if isinstance(result, Exception):
+                logger.warning("Batch chunk failed: %s", result)
+                continue
+            all_results.update(result)
 
         # Escalate listings that contain escalation keywords (rate-limited)
         if self._config.escalation_enabled and profile.escalation_keywords:
             escalation_count = 0
             for listing in listings:
-                if escalation_count >= MAX_ESCALATIONS_PER_BATCH:
-                    logger.info("Escalation cap reached (%d), deferring rest", MAX_ESCALATIONS_PER_BATCH)
-                    break
                 ev = all_results.get(listing.id)
                 if not ev or not ev.relevant:
                     continue
