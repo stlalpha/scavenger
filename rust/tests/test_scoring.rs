@@ -10,6 +10,12 @@ fn make_profile(keywords: Vec<KeywordGroup>, negatives: Vec<String>) -> Profile 
         sources: vec![],
         price_min: None,
         price_max: None,
+        poll_interval_sec: 3600,
+        alert_priority: scavenger::models::AlertPriority::Normal,
+        enabled: true,
+        tags: vec![],
+        escalation_keywords: vec![],
+        location_radius_mi: None,
     }
 }
 
@@ -87,7 +93,7 @@ fn title_hits_weighted_higher_than_desc() {
 #[test]
 fn or_group_any_variant_matches() {
     let p = make_profile(
-        vec![KeywordGroup::Variants(vec![
+        vec![KeywordGroup::Any(vec![
             "stratocaster".into(),
             "strat".into(),
         ])],

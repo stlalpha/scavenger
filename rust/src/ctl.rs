@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn cmd_list_profiles_formats_output() {
-        use crate::models::{Keyword, Profile};
+        use crate::models::{AlertPriority, KeywordGroup, Profile};
 
         let config = AppConfig {
             global_config: crate::config::GlobalConfig::default(),
@@ -144,13 +144,13 @@ mod tests {
                 Profile {
                     id: "bikes".into(),
                     name: "Mountain Bikes".into(),
-                    keywords: vec![Keyword::Single("bike".into())],
+                    keywords: vec![KeywordGroup::Single("bike".into())],
                     negative_keywords: vec![],
                     sources: vec!["ebay".into(), "craigslist".into()],
                     price_min: None,
                     price_max: Some(500.0),
                     poll_interval_sec: 3600,
-                    alert_priority: "high".into(),
+                    alert_priority: AlertPriority::High,
                     enabled: true,
                     tags: vec![],
                     escalation_keywords: vec![],
@@ -159,13 +159,13 @@ mod tests {
                 Profile {
                     id: "records".into(),
                     name: "Vinyl Records".into(),
-                    keywords: vec![Keyword::Single("vinyl".into())],
+                    keywords: vec![KeywordGroup::Single("vinyl".into())],
                     negative_keywords: vec![],
                     sources: vec!["ebay".into()],
                     price_min: None,
                     price_max: None,
                     poll_interval_sec: 7200,
-                    alert_priority: "normal".into(),
+                    alert_priority: AlertPriority::Normal,
                     enabled: false,
                     tags: vec![],
                     escalation_keywords: vec![],

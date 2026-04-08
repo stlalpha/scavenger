@@ -1,12 +1,12 @@
-use crate::models::{KeywordEntry, Listing, Profile};
+use crate::models::{KeywordGroup, Listing, Profile};
 
 /// Format keywords as comma-separated, with "or" joining variants in groups.
-fn format_keywords(keywords: &[KeywordEntry]) -> String {
+fn format_keywords(keywords: &[KeywordGroup]) -> String {
     keywords
         .iter()
         .map(|kw| match kw {
-            KeywordEntry::Single(s) => s.clone(),
-            KeywordEntry::Group(variants) => variants.join(" or "),
+            KeywordGroup::Single(s) => s.clone(),
+            KeywordGroup::Any(variants) => variants.join(" or "),
         })
         .collect::<Vec<_>>()
         .join(", ")

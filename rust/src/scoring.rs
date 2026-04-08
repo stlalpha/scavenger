@@ -3,7 +3,7 @@ use crate::models::{KeywordGroup, Profile};
 fn group_matches(text_lower: &str, group: &KeywordGroup) -> bool {
     match group {
         KeywordGroup::Single(term) => text_lower.contains(&term.to_lowercase() as &str),
-        KeywordGroup::Variants(terms) => {
+        KeywordGroup::Any(terms) => {
             terms.iter().any(|t| text_lower.contains(&t.to_lowercase() as &str))
         }
     }
@@ -91,6 +91,12 @@ mod tests {
             sources: vec![],
             price_min: None,
             price_max: None,
+            poll_interval_sec: 3600,
+            alert_priority: crate::models::AlertPriority::Normal,
+            enabled: true,
+            tags: vec![],
+            escalation_keywords: vec![],
+            location_radius_mi: None,
         }
     }
 
@@ -163,7 +169,7 @@ mod tests {
     #[test]
     fn or_group_matches_any_variant() {
         let p = make_profile(
-            vec![KeywordGroup::Variants(vec![
+            vec![KeywordGroup::Any(vec![
                 "stratocaster".into(),
                 "strat".into(),
             ])],

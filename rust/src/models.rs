@@ -172,3 +172,36 @@ pub struct SourceState {
 
 /// Re-export content_hash from dedup for units that expect it here
 pub use crate::dedup::content_hash;
+
+impl std::fmt::Display for AlertPriority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::High => write!(f, "high"),
+            Self::Normal => write!(f, "normal"),
+            Self::Low => write!(f, "low"),
+        }
+    }
+}
+
+impl ListingStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Seen => "seen",
+            Self::Saved => "saved",
+            Self::Dismissed => "dismissed",
+            Self::Snoozed => "snoozed",
+        }
+    }
+
+    pub fn from_str_checked(s: &str) -> Result<Self> {
+        match s {
+            "new" => Ok(Self::New),
+            "seen" => Ok(Self::Seen),
+            "saved" => Ok(Self::Saved),
+            "dismissed" => Ok(Self::Dismissed),
+            "snoozed" => Ok(Self::Snoozed),
+            _ => Err(ScavengerError::Config(format!("invalid status: {}", s))),
+        }
+    }
+}

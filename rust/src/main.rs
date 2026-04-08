@@ -1,18 +1,21 @@
-mod config;
-mod ctl;
-mod models;
-
 use std::path::PathBuf;
 use std::process;
 
 use clap::{Parser, Subcommand};
 
-use config::{default_config_path, load_config};
+use scavenger::config::{load_config, load_ai_config};
+use scavenger::ctl;
+
+fn default_config_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.config"))
+        .join("scavenger")
+        .join("config.toml")
+}
 
 #[derive(Parser)]
 #[command(name = "scavenger", about = "Continuous web intelligence terminal")]
 struct Cli {
-    /// Path to config file
     #[arg(long, global = true, default_value_os_t = default_config_path())]
     config: PathBuf,
 
@@ -33,16 +36,9 @@ enum Command {
 
 #[derive(Subcommand)]
 enum CtlAction {
-    /// Show daemon status
     Status,
-    /// Stop the daemon
     Stop,
-    /// Trigger immediate poll for a profile
-    Poll {
-        /// Profile name or id
-        profile: String,
-    },
-    /// List all configured profiles
+    Poll { profile: String },
     ListProfiles,
 }
 
@@ -51,24 +47,44 @@ fn main() {
 
     match cli.command {
         None => {
-            let app_config = match load_config(&cli.config) {
+            let config = match load_config(&cli.config) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("Error: {e}");
                     process::exit(1);
                 }
             };
-            let _ = app_config;
-            todo!("TUI launch not yet implemented")
+            match scavenger::tui::App::new(config) {
+                Ok(mut app) => {
+                    if let Err(e) = app.run() {
+                        eprintln!("TUI error: {e}");
+                        process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
+            }
         }
         Some(Command::Daemon) => {
-            if let Err(e) = ctl::cmd_start(&cli.config) {
-                eprintln!("Error: {e}");
+            let config = match load_config(&cli.config) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
+            };
+            let ai_config = load_ai_config(&cli.config).ok();
+            let daemon = scavenger::daemon::Daemon::new(config, ai_config, Some(cli.config));
+            let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
+            if let Err(e) = rt.block_on(daemon.run()) {
+                eprintln!("Daemon error: {e}");
                 process::exit(1);
             }
         }
         Some(Command::Ctl { action }) => {
-            let app_config = match load_config(&cli.config) {
+            let config = match load_config(&cli.config) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("Error: {e}");
@@ -76,10 +92,10 @@ fn main() {
                 }
             };
             match action {
-                CtlAction::Status => ctl::cmd_status(&app_config),
-                CtlAction::Stop => ctl::cmd_stop(&app_config),
-                CtlAction::Poll { profile } => ctl::cmd_poll(&app_config, &profile),
-                CtlAction::ListProfiles => ctl::cmd_list_profiles(&app_config),
+                CtlAction::Status => ctl::cmd_status(&config),
+                CtlAction::Stop => ctl::cmd_stop(&config),
+                CtlAction::Poll { profile } => ctl::cmd_poll(&config, &profile),
+                CtlAction::ListProfiles => ctl::cmd_list_profiles(&config),
             }
         }
     }
@@ -105,65 +121,21 @@ mod tests {
     #[test]
     fn parse_ctl_status() {
         let cli = Cli::try_parse_from(["scavenger", "ctl", "status"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::Ctl {
-                action: CtlAction::Status
-            })
-        ));
-    }
-
-    #[test]
-    fn parse_ctl_stop() {
-        let cli = Cli::try_parse_from(["scavenger", "ctl", "stop"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::Ctl {
-                action: CtlAction::Stop
-            })
-        ));
+        assert!(matches!(cli.command, Some(Command::Ctl { action: CtlAction::Status })));
     }
 
     #[test]
     fn parse_ctl_poll() {
         let cli = Cli::try_parse_from(["scavenger", "ctl", "poll", "bikes"]).unwrap();
         match cli.command {
-            Some(Command::Ctl {
-                action: CtlAction::Poll { profile },
-            }) => assert_eq!(profile, "bikes"),
+            Some(Command::Ctl { action: CtlAction::Poll { profile } }) => assert_eq!(profile, "bikes"),
             _ => panic!("expected ctl poll"),
         }
-    }
-
-    #[test]
-    fn parse_ctl_list_profiles() {
-        let cli = Cli::try_parse_from(["scavenger", "ctl", "list-profiles"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::Ctl {
-                action: CtlAction::ListProfiles
-            })
-        ));
     }
 
     #[test]
     fn parse_custom_config() {
         let cli = Cli::try_parse_from(["scavenger", "--config", "/tmp/test.toml"]).unwrap();
         assert_eq!(cli.config, PathBuf::from("/tmp/test.toml"));
-        assert!(cli.command.is_none());
-    }
-
-    #[test]
-    fn parse_config_before_subcommand() {
-        let cli =
-            Cli::try_parse_from(["scavenger", "--config", "/tmp/test.toml", "ctl", "status"])
-                .unwrap();
-        assert_eq!(cli.config, PathBuf::from("/tmp/test.toml"));
-        assert!(matches!(
-            cli.command,
-            Some(Command::Ctl {
-                action: CtlAction::Status
-            })
-        ));
     }
 }

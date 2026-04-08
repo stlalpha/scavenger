@@ -22,8 +22,8 @@ use self::socket::SocketServer;
 
 pub struct Daemon {
     config: Arc<Mutex<AppConfig>>,
-    config_path: Option<PathBuf>,
-    db: Arc<Database>,
+    _config_path: Option<PathBuf>,
+    db: Arc<Mutex<Database>>,
     scheduler: Arc<PollScheduler>,
     socket_server: Arc<SocketServer>,
     plugins: Arc<Mutex<HashMap<String, Box<dyn Plugin>>>>,
@@ -34,8 +34,6 @@ pub struct Daemon {
 }
 
 fn make_plugins(_config: &AppConfig) -> HashMap<String, Box<dyn Plugin>> {
-    // Stub: actual plugins are implemented in their own work units.
-    // In production this would instantiate EbayPlugin, CraigslistPlugin, etc.
     HashMap::new()
 }
 
@@ -45,21 +43,22 @@ impl Daemon {
         ai_config: Option<AIConfig>,
         config_path: Option<PathBuf>,
     ) -> Self {
-        let socket_path = config.socket_path.clone();
-        let db_path = config.db_path.clone();
+        let socket_path = config.socket_path();
+        let db_path = config.db_path();
         let plugins = make_plugins(&config);
 
         let evaluator: Arc<dyn Evaluator> = if ai_config.as_ref().map_or(false, |c| c.enabled) {
-            // Stub: real AIEvaluator would be constructed here
-            Arc::new(NoopEvaluator)
+            Arc::new(NoopEvaluator) // TODO: construct real AIEvaluator
         } else {
             Arc::new(NoopEvaluator)
         };
 
+        let db = Database::new(&db_path).expect("failed to open database");
+
         Self {
             config: Arc::new(Mutex::new(config)),
-            config_path,
-            db: Arc::new(Database::new(db_path)),
+            _config_path: config_path,
+            db: Arc::new(Mutex::new(db)),
             scheduler: Arc::new(PollScheduler::new()),
             socket_server: Arc::new(SocketServer::new(socket_path)),
             plugins: Arc::new(Mutex::new(plugins)),
@@ -71,12 +70,14 @@ impl Daemon {
     }
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.db.init().await?;
-        self.db.migrate().await?;
-        self.evaluator.start().await?;
+        {
+            let db = self.db.lock().await;
+            db.init()?;
+            db.migrate()?;
+        }
+        self.evaluator.start().await;
         self.scheduler.start().await;
 
-        // Register socket handlers before starting the listener
         self.register_socket_handlers().await;
         self.socket_server.start().await?;
         self.register_profiles().await;
@@ -84,16 +85,12 @@ impl Daemon {
         let config = self.config.lock().await;
         let enabled_count = config.profiles.iter().filter(|p| p.enabled).count();
         info!(
-            socket = %config.socket_path.display(),
             profiles = enabled_count,
             "daemon started"
         );
         drop(config);
 
-        // Wait for shutdown signal (SIGINT/SIGTERM) or explicit notify
-        let shutdown = self.shutdown.clone();
         let sig_shutdown = self.shutdown.clone();
-
         tokio::spawn(async move {
             let mut sigint =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
@@ -108,13 +105,12 @@ impl Daemon {
             sig_shutdown.notify_one();
         });
 
-        shutdown.notified().await;
+        self.shutdown.notified().await;
         self.shutdown().await;
         Ok(())
     }
 
     async fn register_socket_handlers(&self) {
-        // Status handler (sync — can't await Mutex locks, returns static shape for now)
         self.socket_server
             .register_status_handler(Arc::new(|| {
                 serde_json::json!({
@@ -126,45 +122,16 @@ impl Daemon {
             }))
             .await;
 
-        let config_for_poll = self.config.clone();
-        let db = self.db.clone();
-        let plugins = self.plugins.clone();
-        let evaluator = self.evaluator.clone();
-        let active_polls_for_poll = self.active_polls.clone();
-        let bot_blocks_for_poll = self.bot_blocks.clone();
-        self.socket_server
-            .register_poll_handler(Arc::new(move |profile_id: String| {
-                let config = config_for_poll.clone();
-                let db = db.clone();
-                let plugins = plugins.clone();
-                let evaluator = evaluator.clone();
-                let active_polls = active_polls_for_poll.clone();
-                let bot_blocks = bot_blocks_for_poll.clone();
-                Box::pin(async move {
-                    let cfg = config.lock().await;
-                    let profile = cfg.profiles.iter().find(|p| p.id == profile_id).cloned();
-                    drop(cfg);
-                    if let Some(profile) = profile {
-                        let _ =
-                            poll_profile(&profile, &db, &plugins, &evaluator, &active_polls, &bot_blocks)
-                                .await;
-                    }
-                })
-            }))
-            .await;
-
-        // Reload handler (stub — full implementation will re-read config and diff profiles)
-        self.socket_server
-            .register_reload_handler(Arc::new(|| {
-                Box::pin(async { warn!("config reload not yet implemented in Rust port") })
-            }))
-            .await;
-
-        // Shutdown handler
         let shutdown = self.shutdown.clone();
         self.socket_server
             .register_shutdown_handler(Arc::new(move || {
                 shutdown.notify_one();
+            }))
+            .await;
+
+        self.socket_server
+            .register_reload_handler(Arc::new(|| {
+                Box::pin(async { warn!("config reload not yet implemented") })
             }))
             .await;
     }
@@ -176,14 +143,14 @@ impl Daemon {
                 continue;
             }
 
-            // Find the most recent poll time across this profile's sources
             let mut last_polled: Option<DateTime<Utc>> = None;
-            for source_id in &profile.sources {
-                if let Ok(Some(state)) = self.db.get_source_state(source_id).await {
-                    if let Some(ts_val) = state.get("last_polled") {
-                        if let Some(ts_str) = ts_val.as_str() {
-                            if let Ok(ts) = ts_str.parse::<DateTime<Utc>>() {
-                                if last_polled.map_or(true, |lp| ts > lp) {
+            {
+                let db = self.db.lock().await;
+                for source_id in &profile.sources {
+                    if let Ok(Some(state)) = db.get_source_state(source_id) {
+                        if let Some(ref lp) = state.last_polled {
+                            if let Ok(ts) = lp.parse::<DateTime<Utc>>() {
+                                if last_polled.map_or(true, |prev| ts > prev) {
                                     last_polled = Some(ts);
                                 }
                             }
@@ -221,17 +188,17 @@ impl Daemon {
 
     pub async fn shutdown(&self) {
         self.scheduler.stop().await;
-        let _ = self.evaluator.stop().await;
+        self.evaluator.stop().await;
         self.socket_server.stop().await;
-        let _ = self.db.close().await;
+        // DB closes when dropped
+        drop(self.db.lock().await);
         info!("daemon shut down");
     }
 }
 
-/// Execute a poll for a single profile across all its sources.
 async fn poll_profile(
     profile: &Profile,
-    db: &Database,
+    db: &Mutex<Database>,
     plugins: &Mutex<HashMap<String, Box<dyn Plugin>>>,
     evaluator: &Arc<dyn Evaluator>,
     active_polls: &Mutex<HashSet<String>>,
@@ -247,12 +214,13 @@ async fn poll_profile(
         match result {
             Ok(listings) => {
                 new_listings.extend(listings);
-                db.update_source_state(source_id, Some(Utc::now()), None)
-                    .await?;
+                {
+                    let db = db.lock().await;
+                    db.update_source_state(source_id, Some(Utc::now()), 0, None)?;
+                }
                 bot_blocks.lock().await.remove(source_id);
             }
             Err(e) => {
-                // Check if it's a bot detection error
                 if let Some(bot_err) = e.downcast_ref::<BotDetectedError>() {
                     warn!(
                         plugin = %bot_err.plugin_id,
@@ -270,24 +238,18 @@ async fn poll_profile(
                         error = %e,
                         "poll failed"
                     );
-                    // Increment consecutive errors
-                    let state = db.get_source_state(source_id).await?;
-                    let current_errors = state
-                        .as_ref()
-                        .and_then(|s| s.get("consecutive_errors"))
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    let existing_last_polled = state
-                        .as_ref()
-                        .and_then(|s| s.get("last_polled"))
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<DateTime<Utc>>().ok());
+                    let db = db.lock().await;
+                    let state = db.get_source_state(source_id)?;
+                    let current_errors = state.as_ref().map(|s| s.consecutive_errors).unwrap_or(0);
+                    let existing_last_polled = state.as_ref().and_then(|s| {
+                        s.last_polled.as_ref().and_then(|lp| lp.parse::<DateTime<Utc>>().ok())
+                    });
                     db.update_source_state(
                         source_id,
                         existing_last_polled,
-                        Some(current_errors + 1),
-                    )
-                    .await?;
+                        current_errors + 1,
+                        None,
+                    )?;
                 }
             }
         }
@@ -298,11 +260,10 @@ async fn poll_profile(
     Ok(new_listings)
 }
 
-/// Poll a single source within a profile: fetch, dedup, score, AI eval, upsert.
 async fn poll_source(
     profile: &Profile,
     source_id: &str,
-    db: &Database,
+    db: &Mutex<Database>,
     plugins: &Mutex<HashMap<String, Box<dyn Plugin>>>,
     evaluator: &dyn Evaluator,
 ) -> Result<Vec<Listing>, Box<dyn std::error::Error + Send + Sync>> {
@@ -315,23 +276,27 @@ async fn poll_source(
     };
 
     let ids: Vec<String> = fetched.iter().map(|l| l.id.clone()).collect();
-    let known_ids = db.get_existing_ids(&ids).await?;
+    let known_ids = {
+        let db = db.lock().await;
+        db.get_existing_ids(&ids)?
+    };
 
     let mut scored: Vec<Listing> = Vec::new();
     for mut listing in fetched {
         if known_ids.contains(&listing.id) {
             continue;
         }
-        listing.relevance_score = score_listing(profile, &listing.title, &listing.description, listing.price);
+        listing.relevance_score =
+            score_listing(profile, &listing.title, &listing.description, listing.price);
         if listing.relevance_score > 0.0 {
             scored.push(listing);
         }
     }
 
-    // Batch AI evaluation
-    let evaluations = evaluator.evaluate_batch(profile, &scored).await?;
+    let evaluations = evaluator.evaluate_batch(profile, &scored).await;
 
     let mut new_listings = Vec::new();
+    let db = db.lock().await;
     for mut listing in scored {
         if let Some(eval) = evaluations.get(&listing.id) {
             if !eval.relevant {
@@ -339,7 +304,7 @@ async fn poll_source(
             }
             listing.ai_evaluation = Some(serde_json::to_string(eval)?);
         }
-        if db.upsert_listing(&listing).await? {
+        if db.upsert_listing(&listing)? {
             new_listings.push(listing);
         }
     }

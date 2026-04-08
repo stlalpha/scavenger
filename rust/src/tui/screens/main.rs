@@ -114,7 +114,7 @@ pub fn render_main_screen(
     buf: &mut Buffer,
     profiles: &[Profile],
     active_profile: Option<&str>,
-    profile_stats: &std::collections::HashMap<String, u32>,
+    profile_stats: &std::collections::HashMap<String, usize>,
     listings: &[Listing],
     selected_listing: Option<usize>,
     focused: FocusedPanel,
@@ -171,7 +171,7 @@ fn render_profile_sidebar(
     buf: &mut Buffer,
     profiles: &[Profile],
     active_profile: Option<&str>,
-    stats: &std::collections::HashMap<String, u32>,
+    stats: &std::collections::HashMap<String, usize>,
     focused: bool,
 ) {
     let border_color = if focused { CLR_ACCENT } else { Color::Rgb(0x22, 0x22, 0x22) };

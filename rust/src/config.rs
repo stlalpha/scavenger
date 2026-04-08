@@ -133,7 +133,10 @@ pub fn load_ai_config(path: &Path) -> Result<AIConfig> {
         .map_err(|e| ScavengerError::Config(format!("Invalid AI config TOML: {e}")))?;
 
     match parsed.ai {
-        Some(cfg) => Ok(cfg.resolve_env_keys()),
+        Some(mut cfg) => {
+            cfg.resolve_env_keys();
+            Ok(cfg)
+        }
         None => Ok(AIConfig::default()),
     }
 }
@@ -179,7 +182,7 @@ fn profile_to_item(profile: &Profile) -> toml_edit::Item {
         t.insert("price_max", value(v));
     }
     if profile.poll_interval_sec != 3600 {
-        t.insert("poll_interval_sec", value(profile.poll_interval_sec));
+        t.insert("poll_interval_sec", value(profile.poll_interval_sec as i64));
     }
     if !matches!(profile.alert_priority, crate::models::AlertPriority::Normal) {
         let s = match profile.alert_priority {
@@ -196,7 +199,7 @@ fn profile_to_item(profile: &Profile) -> toml_edit::Item {
         t.insert("escalation_keywords", Item::Value(toml_edit::Value::Array(strings_to_array(&profile.escalation_keywords))));
     }
     if let Some(v) = profile.location_radius_mi {
-        t.insert("location_radius_mi", value(v));
+        t.insert("location_radius_mi", value(v as i64));
     }
 
     Item::Table(t)

@@ -68,7 +68,7 @@ pub struct App {
     active_profile_id: Option<String>,
     listings: Vec<Listing>,
     selected_index: Option<usize>,
-    profile_stats: HashMap<String, u32>,
+    profile_stats: HashMap<String, usize>,
     focused: FocusedPanel,
     running: bool,
     shutdown_daemon: bool,
@@ -94,13 +94,13 @@ impl App {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create db dir: {e}"))?;
         }
-        let db = Database::open(&db_path)
+        let db = Database::open(&db_path.to_string_lossy())
             .map_err(|e| format!("open db: {e}"))?;
         db.migrate().map_err(|e| format!("migrate db: {e}"))?;
 
         let active_profile_id = config.profiles.first().map(|p| p.id.clone());
         let profiles = config.profiles.clone();
-        let log_path = config.log_path();
+        let log_path = config.db_path().parent().unwrap_or(std::path::Path::new(".")).join("daemon.log");
 
         Ok(Self {
             config,
@@ -415,8 +415,8 @@ impl App {
             }
         }
         if let Ok(stats) = dl.get_profile_stats() {
-            let total: u32 = stats.values().sum();
-            self.status_state.new_count = total;
+            let total: usize = stats.values().sum();
+            self.status_state.new_count = total as u32;
             self.profile_stats = stats;
         }
         if let Ok(states) = dl.get_source_states() {
@@ -434,7 +434,7 @@ impl App {
         // Update poll interval from active profile
         if let Some(ref pid) = self.active_profile_id {
             if let Some(p) = self.profiles.iter().find(|p| &p.id == pid) {
-                self.status_state.poll_interval_sec = p.poll_interval_sec;
+                self.status_state.poll_interval_sec = p.poll_interval_sec as u32;
             }
         }
     }

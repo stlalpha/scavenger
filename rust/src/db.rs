@@ -88,9 +88,9 @@ fn row_to_source_state(row: &Row<'_>) -> rusqlite::Result<SourceState> {
     let rate_limit_until: Option<String> = row.get("rate_limit_until")?;
     Ok(SourceState {
         plugin_id: row.get("plugin_id")?,
-        last_polled: parse_dt_opt(last_polled).unwrap_or(None),
+        last_polled,
         consecutive_errors: row.get("consecutive_errors")?,
-        rate_limit_until: parse_dt_opt(rate_limit_until).unwrap_or(None),
+        rate_limit_until,
     })
 }
 
@@ -135,6 +135,10 @@ pub struct Database {
 }
 
 impl Database {
+    pub fn new(path: &Path) -> Result<Self> {
+        Self::open(&path.to_string_lossy())
+    }
+
     /// Open a database at the given path. Use ":memory:" for in-memory databases.
     pub fn open(path: &str) -> Result<Self> {
         let conn = if path == ":memory:" {
@@ -308,9 +312,8 @@ impl Database {
     }
 
     pub fn update_listing_status(&self, listing_id: &str, status: &str) -> Result<()> {
-        // Validate status
         ListingStatus::from_str_checked(status)
-            .map_err(DbError::InvalidStatus)?;
+            .map_err(|_| DbError::InvalidStatus(status.to_string()))?;
         self.conn.execute(
             "UPDATE listings SET status=?1 WHERE id=?2",
             params![status, listing_id],
@@ -390,12 +393,9 @@ impl Database {
         )?;
         let rows = stmt
             .query_map(params![listing_id], |row| {
-                let observed_at_str: String = row.get(1)?;
-                let observed_at =
-                    parse_dt(&observed_at_str).unwrap_or_else(|_| Utc::now());
                 Ok(PricePoint {
                     price: row.get(0)?,
-                    observed_at,
+                    observed_at: row.get(1)?,
                 })
             })?
             .filter_map(|r| r.ok())
