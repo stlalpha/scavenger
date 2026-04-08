@@ -120,7 +120,7 @@ impl FacebookPlugin {
             .iter()
             .map(|entry| match entry {
                 KeywordEntry::Single(s) => s.as_str(),
-                KeywordEntry::Variants(v) => v.first().map(|s| s.as_str()).unwrap_or(""),
+                KeywordEntry::Any(v) => v.first().map(|s| s.as_str()).unwrap_or(""),
             })
             .collect::<Vec<&str>>()
             .join(" ")
@@ -182,6 +182,24 @@ impl FacebookPlugin {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::plugins::Plugin for FacebookPlugin {
+    fn plugin_id(&self) -> &str {
+        "facebook"
+    }
+
+    async fn fetch(&self, profile: &Profile) -> Result<Vec<Listing>, Box<dyn std::error::Error + Send + Sync>> {
+        // CDP-based scraping — requires browser connection.
+        // For now, return empty. Full implementation needs chromiumoxide page lifecycle.
+        tracing::warn!("Facebook plugin: CDP scraping not yet wired — returning empty");
+        Ok(vec![])
+    }
+
+    async fn supports_geo(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,7 +211,7 @@ mod tests {
             name: "Test".into(),
             keywords: vec![
                 KeywordEntry::Single("guitar".into()),
-                KeywordEntry::Variants(vec!["fender".into(), "gibson".into()]),
+                KeywordEntry::Any(vec!["fender".into(), "gibson".into()]),
             ],
             negative_keywords: vec![],
             sources: vec!["facebook".into()],

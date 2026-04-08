@@ -47,7 +47,7 @@ fn get_client() -> &'static Client {
 pub async fn fetch_listing_images(
     url: &str,
     source_id: &str,
-) -> Result<Vec<String>, PluginError> {
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     if url.is_empty() || !url.starts_with("http") {
         return Ok(vec![]);
     }

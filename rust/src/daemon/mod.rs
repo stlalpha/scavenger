@@ -14,7 +14,10 @@ use crate::ai::models::AIConfig;
 use crate::config::AppConfig;
 use crate::db::Database;
 use crate::models::{Listing, Profile};
-use crate::plugins::{BotDetectedError, Plugin};
+use crate::plugins::{Plugin, PluginError};
+use crate::plugins::ebay::EbayPlugin;
+use crate::plugins::craigslist::CraigslistPlugin;
+use crate::plugins::facebook::FacebookPlugin;
 use crate::scoring::score_listing;
 
 use self::scheduler::PollScheduler;
@@ -33,8 +36,19 @@ pub struct Daemon {
     shutdown: Arc<Notify>,
 }
 
-fn make_plugins(_config: &AppConfig) -> HashMap<String, Box<dyn Plugin>> {
-    HashMap::new()
+fn make_plugins(config: &AppConfig) -> HashMap<String, Box<dyn Plugin>> {
+    let home_zip = config.global_config.home_zip.clone();
+    let mut plugins: HashMap<String, Box<dyn Plugin>> = HashMap::new();
+    plugins.insert("ebay".to_string(), Box::new(EbayPlugin));
+    plugins.insert(
+        "craigslist".to_string(),
+        Box::new(CraigslistPlugin::new(None, home_zip)),
+    );
+    plugins.insert(
+        "facebook".to_string(),
+        Box::new(FacebookPlugin::new(None, None)),
+    );
+    plugins
 }
 
 impl Daemon {
@@ -70,6 +84,11 @@ impl Daemon {
     }
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        tracing_subscriber::fmt()
+            .with_target(false)
+            .with_timer(tracing_subscriber::fmt::time::time())
+            .init();
+
         {
             let db = self.db.lock().await;
             db.init()?;
@@ -221,16 +240,16 @@ async fn poll_profile(
                 bot_blocks.lock().await.remove(source_id);
             }
             Err(e) => {
-                if let Some(bot_err) = e.downcast_ref::<BotDetectedError>() {
+                if let Some(PluginError::BotDetected { plugin_id, url, message }) = e.downcast_ref::<PluginError>() {
                     warn!(
-                        plugin = %bot_err.plugin_id,
-                        url = %bot_err.url,
-                        "bot block detected"
+                        plugin = %plugin_id,
+                        url = %url,
+                        "bot block detected: {message}"
                     );
                     bot_blocks
                         .lock()
                         .await
-                        .insert(bot_err.plugin_id.clone(), bot_err.url.clone());
+                        .insert(plugin_id.clone(), url.clone());
                 } else {
                     error!(
                         profile = %profile.id,

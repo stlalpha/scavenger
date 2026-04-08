@@ -31,7 +31,7 @@ pub fn build_keywords(keywords: &[KeywordEntry]) -> String {
         .iter()
         .filter_map(|entry| match entry {
             KeywordEntry::Single(s) => Some(s.as_str()),
-            KeywordEntry::Variants(v) => v.first().map(|s| s.as_str()),
+            KeywordEntry::Any(v) => v.first().map(|s| s.as_str()),
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -87,6 +87,7 @@ impl CraigslistPlugin {
     }
 }
 
+#[async_trait::async_trait]
 impl Plugin for CraigslistPlugin {
     fn plugin_id(&self) -> &str {
         "craigslist"
@@ -115,7 +116,7 @@ impl Plugin for CraigslistPlugin {
         Ok(handles.into_iter().flatten().collect())
     }
 
-    fn supports_geo(&self) -> bool {
+    async fn supports_geo(&self) -> bool {
         true
     }
 }
@@ -200,7 +201,7 @@ mod tests {
     fn keyword_construction() {
         let keywords = vec![
             KeywordEntry::Single("guitar".to_string()),
-            KeywordEntry::Variants(vec!["fender".to_string(), "gibson".to_string()]),
+            KeywordEntry::Any(vec!["fender".to_string(), "gibson".to_string()]),
             KeywordEntry::Single("vintage".to_string()),
         ];
         assert_eq!(build_keywords(&keywords), "guitar fender vintage");

@@ -1,31 +1,36 @@
 pub mod browser;
+pub mod craigslist;
+pub mod craigslist_cities;
+pub mod ebay;
+pub mod facebook;
+pub mod images;
 
-use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::models::{Listing, Profile};
 
-/// Error raised when a scraping target detects bot-like behavior.
 #[derive(Debug, thiserror::Error)]
-#[error("Bot detected on {plugin_id}: {message}")]
-pub struct BotDetectedError {
-    pub plugin_id: String,
-    pub url: String,
-    pub message: String,
+pub enum PluginError {
+    #[error("Bot detected on {plugin_id}: {message}")]
+    BotDetected {
+        plugin_id: String,
+        url: String,
+        message: String,
+    },
+    #[error("Navigation error: {0}")]
+    Navigation(String),
+    #[error("Browser error: {0}")]
+    Browser(String),
+    #[error("{0}")]
+    Other(String),
 }
 
-/// Trait implemented by each marketplace scraper.
-///
-/// Plugins fetch listings from a single source (eBay, Craigslist, etc.)
-/// and return raw results for scoring.
+/// Legacy alias — some code references this directly.
+pub type BotDetectedError = PluginError;
+
 #[async_trait]
 pub trait Plugin: Send + Sync {
-    /// Unique identifier for this plugin (e.g. "ebay", "craigslist").
     fn plugin_id(&self) -> &str;
-
-    /// Fetch listings matching the given profile.
-    async fn fetch(&self, profile: &Profile) -> Result<Vec<Listing>>;
-
-    /// Whether this plugin supports geographic filtering.
+    async fn fetch(&self, profile: &Profile) -> Result<Vec<Listing>, Box<dyn std::error::Error + Send + Sync>>;
     async fn supports_geo(&self) -> bool;
 }

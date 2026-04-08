@@ -56,7 +56,7 @@ pub fn build_keywords(keywords: &[KeywordEntry]) -> String {
         .iter()
         .map(|entry| match entry {
             KeywordEntry::Single(s) => s.clone(),
-            KeywordEntry::OrGroup(variants) => {
+            KeywordEntry::Any(variants) => {
                 if variants.len() == 1 {
                     variants[0].clone()
                 } else {
@@ -83,24 +83,30 @@ pub fn build_url(keywords: &str, price_min: Option<f64>, price_max: Option<f64>)
 
 pub struct EbayPlugin;
 
+#[async_trait::async_trait]
 impl Plugin for EbayPlugin {
     fn plugin_id(&self) -> &str {
         "ebay"
     }
 
-    async fn fetch(&self, profile: &Profile) -> Result<Vec<Listing>, PluginError> {
+    async fn fetch(&self, profile: &Profile) -> Result<Vec<Listing>, Box<dyn std::error::Error + Send + Sync>> {
         let keywords = build_keywords(&profile.keywords);
         match self.scrape(&keywords, profile).await {
             Ok(listings) => Ok(listings),
-            Err(e @ PluginError::BotDetected { .. }) => Err(e),
             Err(e) => {
+                // Check if it's a bot detection — propagate those
+                if let Some(pe) = e.downcast_ref::<PluginError>() {
+                    if matches!(pe, PluginError::BotDetected { .. }) {
+                        return Err(e);
+                    }
+                }
                 warn!("eBay fetch failed: {e}");
                 Ok(vec![])
             }
         }
     }
 
-    fn supports_geo(&self) -> bool {
+    async fn supports_geo(&self) -> bool {
         false
     }
 }
@@ -111,14 +117,14 @@ impl EbayPlugin {
         &self,
         keywords: &str,
         profile: &Profile,
-    ) -> Result<Vec<Listing>, PluginError> {
+    ) -> Result<Vec<Listing>, Box<dyn std::error::Error + Send + Sync>> {
         // In production, `page` comes from browser.rs; here we define the logic
         // that operates on a Page handle. The actual browser connection is
         // managed externally.
         let _ = (keywords, profile);
-        Err(PluginError::Browser(
+        Err(Box::new(PluginError::Browser(
             "browser integration requires runtime CDP connection".into(),
-        ))
+        )))
     }
 
     /// Core scraping logic operating on a live CDP page.
@@ -128,7 +134,7 @@ impl EbayPlugin {
         page: &Page,
         keywords: &str,
         profile: &Profile,
-    ) -> Result<Vec<Listing>, PluginError> {
+    ) -> Result<Vec<Listing>, Box<dyn std::error::Error + Send + Sync>> {
         let url = build_url(keywords, profile.price_min, profile.price_max);
 
         page.goto(&url)
@@ -144,11 +150,11 @@ impl EbayPlugin {
         debug!("eBay: page loaded, title={title:?}");
 
         if title.contains("Pardon Our Interruption") {
-            return Err(PluginError::BotDetected {
+            return Err(Box::new(PluginError::BotDetected {
                 plugin_id: "ebay".into(),
                 url: "https://www.ebay.com".into(),
                 message: "eBay bot detection -- needs manual CAPTCHA".into(),
-            });
+            }));
         }
 
         // Find the first working item selector.
@@ -347,7 +353,7 @@ mod tests {
     fn test_build_keywords_or_group() {
         let kw = vec![
             KeywordEntry::Single("porsche".into()),
-            KeywordEntry::OrGroup(vec!["911".into(), "992".into()]),
+            KeywordEntry::Any(vec!["911".into(), "992".into()]),
         ];
         assert_eq!(build_keywords(&kw), "porsche (911,992)");
     }
@@ -356,7 +362,7 @@ mod tests {
     fn test_build_keywords_single_item_or_group() {
         let kw = vec![
             KeywordEntry::Single("porsche".into()),
-            KeywordEntry::OrGroup(vec!["911".into()]),
+            KeywordEntry::Any(vec!["911".into()]),
         ];
         assert_eq!(build_keywords(&kw), "porsche 911");
     }
@@ -392,9 +398,9 @@ mod tests {
         assert_eq!(plugin.plugin_id(), "ebay");
     }
 
-    #[test]
-    fn test_supports_geo() {
+    #[tokio::test]
+    async fn test_supports_geo() {
         let plugin = EbayPlugin;
-        assert!(!plugin.supports_geo());
+        assert!(!plugin.supports_geo().await);
     }
 }
