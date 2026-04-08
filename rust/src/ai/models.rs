@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Result of AI evaluation for a single listing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AIEvaluation {
     pub relevant: bool,
     pub reason: String,
@@ -11,7 +12,7 @@ pub struct AIEvaluation {
 }
 
 impl AIEvaluation {
-    /// Safe fallback -- never drop a listing due to model error.
+    /// Safe fallback: never drop a listing due to model error.
     pub fn passthrough() -> Self {
         Self {
             relevant: true,
@@ -22,6 +23,7 @@ impl AIEvaluation {
     }
 }
 
+/// AI subsystem configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AIConfig {
     #[serde(default)]
@@ -42,6 +44,8 @@ pub struct AIConfig {
     pub escalation_timeout_sec: f64,
     #[serde(default)]
     pub anthropic_api_key: String,
+    #[serde(default = "default_api_key")]
+    pub api_key: String,
 }
 
 fn default_litellm_base_url() -> String {
@@ -62,6 +66,9 @@ fn default_escalation_min_keyword_score() -> f64 {
 fn default_escalation_timeout() -> f64 {
     30.0
 }
+fn default_api_key() -> String {
+    "noop".to_string()
+}
 
 impl Default for AIConfig {
     fn default() -> Self {
@@ -75,12 +82,14 @@ impl Default for AIConfig {
             escalation_min_keyword_score: default_escalation_min_keyword_score(),
             escalation_timeout_sec: default_escalation_timeout(),
             anthropic_api_key: String::new(),
+            api_key: default_api_key(),
         }
     }
 }
 
 impl AIConfig {
-    /// Resolve anthropic_api_key from env var or ~/.config/scavenger/.env if not set.
+    /// Resolve API keys from environment variables and dotenv file.
+    /// Call after deserialization.
     pub fn resolve_env_keys(&mut self) {
         if self.anthropic_api_key.is_empty() {
             if let Ok(val) = std::env::var("ANTHROPIC_API_KEY") {
@@ -88,15 +97,15 @@ impl AIConfig {
             }
         }
         if self.anthropic_api_key.is_empty() {
-            if let Some(config_dir) = dirs::config_dir() {
-                let dotenv: PathBuf = config_dir.join("scavenger").join(".env");
+            if let Some(home) = dirs_path() {
+                let dotenv = home.join(".config/scavenger/.env");
                 if let Ok(contents) = fs::read_to_string(&dotenv) {
                     for line in contents.lines() {
-                        let line = line.trim();
-                        if line.starts_with('#') {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with('#') {
                             continue;
                         }
-                        if let Some(val) = line.strip_prefix("ANTHROPIC_API_KEY=") {
+                        if let Some(val) = trimmed.strip_prefix("ANTHROPIC_API_KEY=") {
                             let val = val.trim();
                             if !val.is_empty() {
                                 self.anthropic_api_key = val.to_string();
@@ -108,4 +117,8 @@ impl AIConfig {
             }
         }
     }
+}
+
+fn dirs_path() -> Option<PathBuf> {
+    std::env::var("HOME").ok().map(PathBuf::from)
 }

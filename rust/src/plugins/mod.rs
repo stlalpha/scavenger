@@ -1,25 +1,31 @@
 pub mod browser;
-pub mod craigslist;
-pub mod craigslist_cities;
-pub mod ebay;
-pub mod facebook;
-pub mod images;
 
-use crate::error::ScavengerError;
+use anyhow::Result;
+use async_trait::async_trait;
+
 use crate::models::{Listing, Profile};
 
-/// Marker error for bot detection — plugins should return this so callers
-/// can decide whether to retry or back off.
-pub fn bot_detected(source: &str) -> ScavengerError {
-    ScavengerError::Plugin(format!("bot detected on {source}"))
+/// Error raised when a scraping target detects bot-like behavior.
+#[derive(Debug, thiserror::Error)]
+#[error("Bot detected on {plugin_id}: {message}")]
+pub struct BotDetectedError {
+    pub plugin_id: String,
+    pub url: String,
+    pub message: String,
 }
 
-/// Trait that all source plugins implement.
+/// Trait implemented by each marketplace scraper.
+///
+/// Plugins fetch listings from a single source (eBay, Craigslist, etc.)
+/// and return raw results for scoring.
+#[async_trait]
 pub trait Plugin: Send + Sync {
-    fn name(&self) -> &str;
-    fn supports_geo(&self) -> bool;
-    fn fetch(
-        &self,
-        profile: &Profile,
-    ) -> impl std::future::Future<Output = crate::error::Result<Vec<Listing>>> + Send;
+    /// Unique identifier for this plugin (e.g. "ebay", "craigslist").
+    fn plugin_id(&self) -> &str;
+
+    /// Fetch listings matching the given profile.
+    async fn fetch(&self, profile: &Profile) -> Result<Vec<Listing>>;
+
+    /// Whether this plugin supports geographic filtering.
+    async fn supports_geo(&self) -> bool;
 }

@@ -1,0 +1,35 @@
+[global]
+db_path = "~/.local/share/scavenger/scavenger.db"
+log_level = "DEBUG"
+home_zip = "90210"
+tui_refresh_sec = 3.0
+
+[[profiles]]
+id = "guitars"
+name = "Vintage Guitars"
+keywords = ["guitar", ["fender", "gibson"], "vintage"]
+negative_keywords = ["broken", "parts only"]
+sources = ["ebay", "craigslist"]
+price_min = 100.0
+price_max = 5000.0
+poll_interval_sec = 1800
+alert_priority = "high"
+enabled = true
+tags = ["instruments", "vintage"]
+escalation_keywords = ["rare", "mint"]
+location_radius_mi = 50
+
+[[profiles]]
+id = "synths"
+name = "Synthesizers"
+keywords = ["synthesizer", ["moog", "roland", "korg"]]
+sources = ["ebay"]
+enabled = true
+
+[ai]
+enabled = true
+filter_model = "llama3:8b"
+filter_timeout_sec = 45.0
+escalation_enabled = true
+escalation_model = "claude-haiku-4-5-20251001"
+escalation_min_keyword_score = 80.0

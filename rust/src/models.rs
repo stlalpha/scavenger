@@ -150,3 +150,25 @@ impl Profile {
         Ok(())
     }
 }
+
+/// Type alias for units that used KeywordEntry instead of KeywordGroup
+pub type KeywordEntry = KeywordGroup;
+
+/// Price history record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PricePoint {
+    pub price: f64,
+    pub observed_at: String,
+}
+
+/// Source plugin state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceState {
+    pub plugin_id: String,
+    pub last_polled: Option<String>,
+    pub consecutive_errors: i64,
+    pub rate_limit_until: Option<String>,
+}
+
+/// Re-export content_hash from dedup for units that expect it here
+pub use crate::dedup::content_hash;
