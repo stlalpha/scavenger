@@ -146,10 +146,25 @@ fn cmd_status(config_path: &PathBuf) {
     eprintln!("\x1b[1mscavenger status\x1b[0m");
     eprintln!();
 
-    if chrome::is_chrome_running() {
-        eprintln!("  \x1b[32mchrome   up\x1b[0m");
+    let chrome_status = chrome::chrome_status();
+    if chrome_status.running {
+        match chrome_status.pid {
+            Some(pid) => eprintln!(
+                "  \x1b[32mchrome   up\x1b[0m  \x1b[2m{} pid={pid}\x1b[0m",
+                chrome_status.ownership.label()
+            ),
+            None => eprintln!(
+                "  \x1b[32mchrome   up\x1b[0m  \x1b[2m{}\x1b[0m",
+                chrome_status.ownership.label()
+            ),
+        }
+    } else if chrome_status.ownership == chrome::ChromeOwnershipState::Stale {
+        match chrome_status.pid {
+            Some(pid) => eprintln!("  \x1b[31mchrome   down\x1b[0m  \x1b[2mstale pid={pid}\x1b[0m"),
+            None => eprintln!("  \x1b[31mchrome   down\x1b[0m  \x1b[2mstale\x1b[0m"),
+        }
     } else {
-        eprintln!("  \x1b[31mchrome   down\x1b[0m");
+        eprintln!("  \x1b[31mchrome   down\x1b[0m  \x1b[2mmissing\x1b[0m");
     }
 
     let config = load_or_die(config_path);
