@@ -1,5 +1,7 @@
 use std::io::{Error as IoError, ErrorKind};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -157,7 +159,29 @@ fn prepare_socket_parent(path: &Path) -> Result<(), BoxError> {
     }
 
     if !existed_before || is_scavenger_runtime_dir(parent) {
-        set_permissions(parent, 0o700)?;
+        set_directory_permissions_no_follow(parent, 0o700)?;
+    }
+
+    Ok(())
+}
+
+fn set_directory_permissions_no_follow(path: &Path, mode: u32) -> Result<(), BoxError> {
+    let dir = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+        .open(path)?;
+
+    if !dir.metadata()?.file_type().is_dir() {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            format!("socket parent is not a directory: {}", path.display()),
+        )
+        .into());
+    }
+
+    let rc = unsafe { libc::fchmod(dir.as_raw_fd(), mode as libc::mode_t) };
+    if rc == -1 {
+        return Err(IoError::last_os_error().into());
     }
 
     Ok(())
