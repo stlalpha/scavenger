@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -120,9 +120,12 @@ fn process_command(pid: u32) -> Option<String> {
 }
 
 fn command_matches_owner(command: &str, owner: &ChromeOwner) -> bool {
+    let port_arg = format!("--remote-debugging-port={}", owner.port);
+    let user_data_arg = format!("--user-data-dir={}", owner.user_data_dir);
+
     owner.port == CDP_PORT
-        && command.contains(&format!("--remote-debugging-port={}", owner.port))
-        && command.contains(&format!("--user-data-dir={}", owner.user_data_dir))
+        && command.split_whitespace().any(|arg| arg == port_arg)
+        && command.split_whitespace().any(|arg| arg == user_data_arg)
 }
 
 fn classify_chrome(
@@ -166,6 +169,47 @@ pub fn chrome_status() -> ChromeStatus {
     let owner = read_owner();
     let command = pid.and_then(process_command);
     classify_chrome(pid, owner.as_ref(), command.as_deref())
+}
+
+fn signal_pid(pid: u32, signal: i32) -> std::io::Result<()> {
+    let rc = unsafe { libc::kill(pid as i32, signal) };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn pid_exists(pid: u32) -> bool {
+    match signal_pid(pid, 0) {
+        Ok(()) => true,
+        Err(e) => e.raw_os_error() != Some(libc::ESRCH),
+    }
+}
+
+fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !pid_exists(pid) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    !pid_exists(pid)
+}
+
+fn terminate_started_chrome(pid: u32) -> Result<(), String> {
+    match signal_pid(pid, libc::SIGTERM) {
+        Ok(()) => {
+            if wait_for_pid_exit(pid, Duration::from_secs(5)) {
+                Ok(())
+            } else {
+                Err(format!("Chrome pid {pid} did not exit after SIGTERM"))
+            }
+        }
+        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 pub fn is_chrome_running() -> bool {
@@ -218,13 +262,23 @@ pub fn start_chrome(headless: bool) -> Result<(), String> {
     for _ in 0..20 {
         std::thread::sleep(Duration::from_millis(250));
         if let Some(pid) = chrome_pid() {
-            write_owner(&ChromeOwner {
+            let owner = ChromeOwner {
                 pid,
                 spawned_pid: child.id(),
                 port: CDP_PORT,
                 chrome_path: chrome.to_string_lossy().into_owned(),
                 user_data_dir: CHROME_DATA.to_string(),
-            })?;
+            };
+            if let Err(e) = write_owner(&owner) {
+                let cleanup = terminate_started_chrome(pid);
+                remove_owner();
+                if let Err(cleanup_err) = cleanup {
+                    return Err(format!(
+                        "{e}; also failed to stop newly started Chrome pid {pid}: {cleanup_err}"
+                    ));
+                }
+                return Err(e);
+            }
             eprintln!("\x1b[32mChrome ready  pid={pid}\x1b[0m");
             return Ok(());
         }
@@ -238,15 +292,26 @@ pub fn stop_chrome() {
     match (status.running, status.pid, status.ownership) {
         (true, Some(pid), ChromeOwnershipState::Owned) => {
             eprintln!("\x1b[1mStopping Chrome (pid {pid})...\x1b[0m");
-            let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-            if rc == -1 {
-                eprintln!(
-                    "\x1b[31mFailed to stop Chrome pid {pid}: {}\x1b[0m",
-                    std::io::Error::last_os_error()
-                );
-            } else {
-                remove_owner();
-                eprintln!("\x1b[32mChrome stopped\x1b[0m");
+            match signal_pid(pid, libc::SIGTERM) {
+                Ok(()) => {
+                    if wait_for_pid_exit(pid, Duration::from_secs(5)) {
+                        remove_owner();
+                        eprintln!("\x1b[32mChrome stopped\x1b[0m");
+                    } else {
+                        eprintln!(
+                            "\x1b[31mChrome pid {pid} did not exit; ownership metadata retained\x1b[0m"
+                        );
+                    }
+                }
+                Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
+                    remove_owner();
+                    eprintln!(
+                        "\x1b[2mChrome already stopped; removed stale ownership metadata\x1b[0m"
+                    );
+                }
+                Err(e) => {
+                    eprintln!("\x1b[31mFailed to stop Chrome pid {pid}: {e}\x1b[0m");
+                }
             }
         }
         (true, Some(pid), ownership) => {
@@ -298,6 +363,12 @@ mod tests {
         ));
         assert!(!command_matches_owner(
             &format!("Google Chrome --user-data-dir={CHROME_DATA}"),
+            &owner
+        ));
+        assert!(!command_matches_owner(
+            &format!(
+                "Google Chrome --remote-debugging-port={CDP_PORT} --user-data-dir={CHROME_DATA}-other"
+            ),
             &owner
         ));
     }
