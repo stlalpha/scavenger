@@ -2,8 +2,46 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 const CDP_PORT: u16 = 9222;
 const CHROME_DATA: &str = "/tmp/scavenger-chrome";
+const OWNER_FILE: &str = "owner.json";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChromeOwnershipState {
+    Owned,
+    External,
+    Stale,
+    Missing,
+}
+
+impl ChromeOwnershipState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Owned => "owned",
+            Self::External => "external",
+            Self::Stale => "stale",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChromeStatus {
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub ownership: ChromeOwnershipState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ChromeOwner {
+    pid: u32,
+    spawned_pid: u32,
+    port: u16,
+    chrome_path: String,
+    user_data_dir: String,
+}
 
 fn find_chrome() -> Option<PathBuf> {
     let candidates = [
@@ -43,14 +81,108 @@ fn chrome_pid() -> Option<u32> {
     s.trim().lines().next()?.trim().parse().ok()
 }
 
+fn owner_path() -> PathBuf {
+    PathBuf::from(CHROME_DATA).join(OWNER_FILE)
+}
+
+fn read_owner() -> Option<ChromeOwner> {
+    let raw = std::fs::read_to_string(owner_path()).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn write_owner(owner: &ChromeOwner) -> Result<(), String> {
+    std::fs::create_dir_all(CHROME_DATA)
+        .map_err(|e| format!("Failed to create Chrome data dir: {e}"))?;
+    let raw = serde_json::to_string_pretty(owner)
+        .map_err(|e| format!("Failed to serialize Chrome ownership metadata: {e}"))?;
+    std::fs::write(owner_path(), raw)
+        .map_err(|e| format!("Failed to write Chrome ownership metadata: {e}"))
+}
+
+fn remove_owner() {
+    let _ = std::fs::remove_file(owner_path());
+}
+
+fn process_command(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if command.is_empty() {
+        None
+    } else {
+        Some(command)
+    }
+}
+
+fn command_matches_owner(command: &str, owner: &ChromeOwner) -> bool {
+    owner.port == CDP_PORT
+        && command.contains(&format!("--remote-debugging-port={}", owner.port))
+        && command.contains(&format!("--user-data-dir={}", owner.user_data_dir))
+}
+
+fn classify_chrome(
+    pid: Option<u32>,
+    owner: Option<&ChromeOwner>,
+    command: Option<&str>,
+) -> ChromeStatus {
+    match (pid, owner) {
+        (Some(pid), Some(owner))
+            if owner.pid == pid
+                && command
+                    .map(|command| command_matches_owner(command, owner))
+                    .unwrap_or(false) =>
+        {
+            ChromeStatus {
+                running: true,
+                pid: Some(pid),
+                ownership: ChromeOwnershipState::Owned,
+            }
+        }
+        (Some(pid), _) => ChromeStatus {
+            running: true,
+            pid: Some(pid),
+            ownership: ChromeOwnershipState::External,
+        },
+        (None, Some(owner)) => ChromeStatus {
+            running: false,
+            pid: Some(owner.pid),
+            ownership: ChromeOwnershipState::Stale,
+        },
+        (None, None) => ChromeStatus {
+            running: false,
+            pid: None,
+            ownership: ChromeOwnershipState::Missing,
+        },
+    }
+}
+
+pub fn chrome_status() -> ChromeStatus {
+    let pid = chrome_pid();
+    let owner = read_owner();
+    let command = pid.and_then(process_command);
+    classify_chrome(pid, owner.as_ref(), command.as_deref())
+}
+
 pub fn is_chrome_running() -> bool {
     chrome_pid().is_some()
 }
 
 pub fn start_chrome(headless: bool) -> Result<(), String> {
-    if is_chrome_running() {
-        eprintln!("\x1b[2mChrome CDP :{CDP_PORT} already up\x1b[0m");
+    let status = chrome_status();
+    if status.running {
+        eprintln!(
+            "\x1b[2mChrome CDP :{CDP_PORT} already up ({})\x1b[0m",
+            status.ownership.label()
+        );
         return Ok(());
+    }
+    if status.ownership == ChromeOwnershipState::Stale {
+        remove_owner();
     }
 
     let chrome = find_chrome().ok_or("Chrome not found. Install Google Chrome.")?;
@@ -75,7 +207,7 @@ pub fn start_chrome(headless: bool) -> Result<(), String> {
         eprintln!("\x1b[1mStarting Chrome (visible)...\x1b[0m");
     }
 
-    Command::new(&chrome)
+    let child = Command::new(&chrome)
         .args(&args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -86,6 +218,13 @@ pub fn start_chrome(headless: bool) -> Result<(), String> {
     for _ in 0..20 {
         std::thread::sleep(Duration::from_millis(250));
         if let Some(pid) = chrome_pid() {
+            write_owner(&ChromeOwner {
+                pid,
+                spawned_pid: child.id(),
+                port: CDP_PORT,
+                chrome_path: chrome.to_string_lossy().into_owned(),
+                user_data_dir: CHROME_DATA.to_string(),
+            })?;
             eprintln!("\x1b[32mChrome ready  pid={pid}\x1b[0m");
             return Ok(());
         }
@@ -95,17 +234,144 @@ pub fn start_chrome(headless: bool) -> Result<(), String> {
 }
 
 pub fn stop_chrome() {
-    if let Some(pid) = chrome_pid() {
-        eprintln!("\x1b[1mStopping Chrome (pid {pid})...\x1b[0m");
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
+    let status = chrome_status();
+    match (status.running, status.pid, status.ownership) {
+        (true, Some(pid), ChromeOwnershipState::Owned) => {
+            eprintln!("\x1b[1mStopping Chrome (pid {pid})...\x1b[0m");
+            let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            if rc == -1 {
+                eprintln!(
+                    "\x1b[31mFailed to stop Chrome pid {pid}: {}\x1b[0m",
+                    std::io::Error::last_os_error()
+                );
+            } else {
+                remove_owner();
+                eprintln!("\x1b[32mChrome stopped\x1b[0m");
+            }
         }
-        eprintln!("\x1b[32mChrome stopped\x1b[0m");
-    } else {
-        eprintln!("\x1b[2mChrome not running\x1b[0m");
+        (true, Some(pid), ownership) => {
+            eprintln!(
+                "\x1b[2mChrome CDP :{CDP_PORT} is {ownership} (pid {pid}); leaving it running\x1b[0m",
+                ownership = ownership.label()
+            );
+        }
+        (false, _, ChromeOwnershipState::Stale) => {
+            remove_owner();
+            eprintln!("\x1b[2mChrome not running; removed stale ownership metadata\x1b[0m");
+        }
+        _ => {
+            eprintln!("\x1b[2mChrome not running\x1b[0m");
+        }
     }
 }
 
 pub fn ensure_chrome() -> Result<(), String> {
     start_chrome(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owner(pid: u32) -> ChromeOwner {
+        ChromeOwner {
+            pid,
+            spawned_pid: pid,
+            port: CDP_PORT,
+            chrome_path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_string(),
+            user_data_dir: CHROME_DATA.to_string(),
+        }
+    }
+
+    fn owned_command() -> String {
+        format!("Google Chrome --remote-debugging-port={CDP_PORT} --user-data-dir={CHROME_DATA}")
+    }
+
+    #[test]
+    fn command_matching_requires_port_and_user_data_dir() {
+        let owner = owner(42);
+
+        assert!(command_matches_owner(&owned_command(), &owner));
+        assert!(!command_matches_owner(
+            "Google Chrome --remote-debugging-port=9222",
+            &owner
+        ));
+        assert!(!command_matches_owner(
+            &format!("Google Chrome --user-data-dir={CHROME_DATA}"),
+            &owner
+        ));
+    }
+
+    #[test]
+    fn classifies_owned_chrome_when_pid_and_command_match() {
+        let owner = owner(42);
+
+        let status = classify_chrome(Some(42), Some(&owner), Some(&owned_command()));
+
+        assert!(status.running);
+        assert_eq!(status.pid, Some(42));
+        assert_eq!(status.ownership, ChromeOwnershipState::Owned);
+    }
+
+    #[test]
+    fn classifies_external_chrome_without_metadata() {
+        let status = classify_chrome(Some(42), None, Some(&owned_command()));
+
+        assert!(status.running);
+        assert_eq!(status.pid, Some(42));
+        assert_eq!(status.ownership, ChromeOwnershipState::External);
+    }
+
+    #[test]
+    fn classifies_external_chrome_when_pid_differs_from_metadata() {
+        let owner = owner(7);
+
+        let status = classify_chrome(Some(42), Some(&owner), Some(&owned_command()));
+
+        assert!(status.running);
+        assert_eq!(status.pid, Some(42));
+        assert_eq!(status.ownership, ChromeOwnershipState::External);
+    }
+
+    #[test]
+    fn classifies_external_chrome_when_command_is_not_plausible() {
+        let owner = owner(42);
+
+        let status = classify_chrome(Some(42), Some(&owner), Some("Google Chrome"));
+
+        assert!(status.running);
+        assert_eq!(status.pid, Some(42));
+        assert_eq!(status.ownership, ChromeOwnershipState::External);
+    }
+
+    #[test]
+    fn classifies_external_chrome_when_command_is_missing() {
+        let owner = owner(42);
+
+        let status = classify_chrome(Some(42), Some(&owner), None);
+
+        assert!(status.running);
+        assert_eq!(status.pid, Some(42));
+        assert_eq!(status.ownership, ChromeOwnershipState::External);
+    }
+
+    #[test]
+    fn classifies_stale_metadata_when_no_cdp_pid_exists() {
+        let owner = owner(42);
+
+        let status = classify_chrome(None, Some(&owner), None);
+
+        assert!(!status.running);
+        assert_eq!(status.pid, Some(42));
+        assert_eq!(status.ownership, ChromeOwnershipState::Stale);
+    }
+
+    #[test]
+    fn classifies_missing_metadata_and_missing_cdp_pid() {
+        let status = classify_chrome(None, None, None);
+
+        assert!(!status.running);
+        assert_eq!(status.pid, None);
+        assert_eq!(status.ownership, ChromeOwnershipState::Missing);
+    }
 }
