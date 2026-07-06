@@ -1,3 +1,8 @@
+use std::io::{Error as IoError, ErrorKind};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -77,15 +82,8 @@ impl SocketServer {
     }
 
     pub async fn start(&self) -> Result<(), BoxError> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-            set_permissions(parent, 0o700)?;
-        }
-
-        // Clean up stale socket file
-        if self.path.exists() {
-            std::fs::remove_file(&self.path)?;
-        }
+        prepare_socket_parent(&self.path)?;
+        remove_stale_socket(&self.path)?;
 
         let listener = UnixListener::bind(&self.path)?;
         set_permissions(&self.path, 0o600)?;
@@ -131,6 +129,108 @@ impl SocketServer {
         if self.path.exists() {
             let _ = std::fs::remove_file(&self.path);
         }
+    }
+}
+
+fn prepare_socket_parent(path: &Path) -> Result<(), BoxError> {
+    let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return Ok(());
+    };
+
+    let existed_before = match std::fs::symlink_metadata(parent) {
+        Ok(_) => true,
+        Err(e) if e.kind() == ErrorKind::NotFound => false,
+        Err(e) => return Err(e.into()),
+    };
+
+    std::fs::create_dir_all(parent)?;
+
+    let parent_type = std::fs::symlink_metadata(parent)?.file_type();
+    if parent_type.is_symlink() {
+        return Ok(());
+    }
+
+    if !parent_type.is_dir() {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            format!("socket parent is not a directory: {}", parent.display()),
+        )
+        .into());
+    }
+
+    if !existed_before || is_scavenger_runtime_dir(parent) {
+        set_directory_permissions_no_follow(parent, 0o700)?;
+    }
+
+    Ok(())
+}
+
+fn set_directory_permissions_no_follow(path: &Path, mode: u32) -> Result<(), BoxError> {
+    let dir = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+        .open(path)?;
+
+    if !dir.metadata()?.file_type().is_dir() {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            format!("socket parent is not a directory: {}", path.display()),
+        )
+        .into());
+    }
+
+    let rc = unsafe { libc::fchmod(dir.as_raw_fd(), mode as libc::mode_t) };
+    if rc == -1 {
+        return Err(IoError::last_os_error().into());
+    }
+
+    Ok(())
+}
+
+fn is_scavenger_runtime_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "scavenger")
+}
+
+fn remove_stale_socket(path: &Path) -> Result<(), BoxError> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+
+    if !metadata.file_type().is_socket() {
+        return Err(IoError::new(
+            ErrorKind::AlreadyExists,
+            format!(
+                "refusing to remove non-socket path at daemon socket location: {}",
+                path.display()
+            ),
+        )
+        .into());
+    }
+
+    match StdUnixStream::connect(path) {
+        Ok(_) => Err(IoError::new(
+            ErrorKind::AlreadyExists,
+            format!("daemon socket is already active: {}", path.display()),
+        )
+        .into()),
+        Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
+            std::fs::remove_file(path)?;
+            Ok(())
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(IoError::new(
+            e.kind(),
+            format!(
+                "could not verify stale daemon socket at {}: {}",
+                path.display(),
+                e
+            ),
+        )
+        .into()),
     }
 }
 
