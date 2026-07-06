@@ -44,7 +44,16 @@ fn default_log_level() -> String {
     "INFO".to_owned()
 }
 fn default_socket_path() -> String {
-    "~/.run/scavenger/daemon.sock".to_owned()
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|runtime| !runtime.is_empty())
+        .map(|runtime| {
+            PathBuf::from(runtime)
+                .join("scavenger")
+                .join("daemon.sock")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|| "~/.run/scavenger/daemon.sock".to_owned())
 }
 fn default_tui_refresh() -> f64 {
     2.0
