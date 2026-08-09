@@ -349,11 +349,19 @@ class ScavengerApp(App):
 
     async def _fix_blocks(self, urls: list[str]) -> None:
         """Kill headless Chrome, start visible with blocked URLs, user fixes, then restart headless."""
+        import os
         import shutil
         import subprocess
         import sys
+        from pathlib import Path
         CDP_PORT = 9222
-        CHROME_DATA = "/tmp/scavenger-chrome"
+        # Durable profile dir (holds marketplace logins) — must match the
+        # Rust binary's chrome::chrome_data_dir(); /tmp is wiped on reboot.
+        if sys.platform == "darwin":
+            CHROME_DATA = str(Path.home() / "Library/Application Support/scavenger/chrome")
+        else:
+            data_home = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))
+            CHROME_DATA = str(Path(data_home) / "scavenger/chrome")
 
         if sys.platform == "darwin":
             chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"

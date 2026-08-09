@@ -1,7 +1,7 @@
 """Shared Chrome CDP connection for scraping plugins.
 
 Requires Chrome running with remote debugging enabled:
-    google-chrome-stable --remote-debugging-port=9222 --user-data-dir=/tmp/scavenger-chrome &
+    google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$HOME/Library/Application Support/scavenger/chrome" &
 
 Uses the real Chrome session (cookies, fingerprint, history) — invisible to bot detection.
 Pages open as real tabs in Chrome. Close the page when done; never close the context.

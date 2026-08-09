@@ -68,6 +68,7 @@ class AIEvaluator:
         self._escalation_model = f"anthropic/{config.escalation_model}"
         self._queue: asyncio.Queue[_EvalJob | None] = asyncio.Queue()
         self._worker_tasks: list[asyncio.Task] = []
+        self._stopped = False
 
     async def start(self) -> None:
         self._worker_tasks = [
@@ -75,10 +76,22 @@ class AIEvaluator:
         ]
 
     async def stop(self) -> None:
-        for _ in self._worker_tasks:
-            await self._queue.put(None)
+        self._stopped = True
+        # Drain queued jobs first so their futures resolve immediately instead
+        # of waiting behind cancellation of the worker tasks.
+        while True:
+            try:
+                job = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._queue.task_done()
+            if job is not None and not job.future.done():
+                job.future.set_result(
+                    {l.id: AIEvaluation.passthrough() for l in job.listings}
+                )
         for task in self._worker_tasks:
-            await task
+            task.cancel()
+        await asyncio.gather(*self._worker_tasks, return_exceptions=True)
 
     async def _worker(self) -> None:
         while True:
@@ -86,8 +99,17 @@ class AIEvaluator:
             if job is None:
                 break
             try:
+                if job.future.done():
+                    continue
                 results = await self._process_batch(job.profile, job.listings)
-                job.future.set_result(results)
+                if not job.future.done():
+                    job.future.set_result(results)
+            except asyncio.CancelledError:
+                if not job.future.done():
+                    job.future.set_result(
+                        {l.id: AIEvaluation.passthrough() for l in job.listings}
+                    )
+                raise
             except Exception as e:
                 if not job.future.done():
                     job.future.set_exception(e)
@@ -165,6 +187,8 @@ class AIEvaluator:
     ) -> dict[str, AIEvaluation]:
         if not listings:
             return {}
+        if self._stopped:
+            return {l.id: AIEvaluation.passthrough() for l in listings}
         loop = asyncio.get_running_loop()
         all_results: dict[str, AIEvaluation] = {}
         futures: list[asyncio.Future] = []
@@ -172,9 +196,20 @@ class AIEvaluator:
             chunk = listings[i : i + BATCH_SIZE]
             future = loop.create_future()
             futures.append(future)
-            await self._queue.put(_EvalJob(profile=profile, listings=chunk, future=future))
-        done = await asyncio.gather(*futures, return_exceptions=True)
+            job = _EvalJob(profile=profile, listings=chunk, future=future)
+            await self._queue.put(job)
+            if self._stopped and not future.done():
+                future.set_result({l.id: AIEvaluation.passthrough() for l in chunk})
+        try:
+            done = await asyncio.gather(*futures, return_exceptions=True)
+        except asyncio.CancelledError:
+            for future in futures:
+                future.cancel()
+            raise
         for result in done:
+            if isinstance(result, asyncio.CancelledError):
+                logger.warning("Batch chunk cancelled")
+                continue
             if isinstance(result, Exception):
                 logger.warning("Batch chunk failed: %s", result)
                 continue

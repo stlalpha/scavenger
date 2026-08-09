@@ -7,3 +7,9 @@ __pycache__/
 *.egg-info/
 dist/
 .code-graph/
+rust/target/
+
+# Local agent/session state and stray DBs (not project files)
+.claude/
+.soulforge/
+proxmox-jobs.sqlite3*
