@@ -16,10 +16,15 @@ fn serde_round_trip() {
         reason: "not matching profile".to_string(),
         notable: Some("rare variant".to_string()),
         escalate: true,
+        model: "qwen3.5:35b".to_string(),
     };
     let json = serde_json::to_string(&eval).unwrap();
     let deserialized: AIEvaluation = serde_json::from_str(&json).unwrap();
     assert_eq!(eval, deserialized);
+    // Rows written before the model field still parse (defaults to empty).
+    let legacy = r#"{"relevant":true,"reason":"x","notable":null,"escalate":false}"#;
+    let parsed: AIEvaluation = serde_json::from_str(legacy).unwrap();
+    assert_eq!(parsed.model, "");
 }
 
 #[test]

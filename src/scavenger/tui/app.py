@@ -349,9 +349,11 @@ class ScavengerApp(App):
 
     async def _fix_blocks(self, urls: list[str]) -> None:
         """Kill headless Chrome, start visible with blocked URLs, user fixes, then restart headless."""
+        import os
         import shutil
         import subprocess
         import sys
+        from pathlib import Path
         CDP_PORT = 9222
         # Durable profile dir (holds marketplace logins) — must match the
         # Rust binary's chrome::chrome_data_dir(); /tmp is wiped on reboot.

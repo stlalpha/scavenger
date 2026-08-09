@@ -130,6 +130,15 @@ fn test_price_history_on_change() {
     assert_eq!(history.len(), 2);
     assert!((history[0].price - 29.99).abs() < f64::EPSILON);
     assert!((history[1].price - 19.99).abs() < f64::EPSILON);
+
+    // The new price must be PERSISTED on the row, not just appended to
+    // history — otherwise every later poll re-detects the same "change".
+    let stored = db.get_listing("abc123").unwrap().unwrap();
+    assert_eq!(stored.price, Some(19.99));
+
+    // A third upsert at the now-current price must NOT append another row.
+    db.upsert_listing(&listing).unwrap();
+    assert_eq!(db.get_price_history("abc123").unwrap().len(), 2);
 }
 
 #[test]

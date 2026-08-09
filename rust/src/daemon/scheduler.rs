@@ -166,7 +166,7 @@ impl PollScheduler {
     pub async fn stop(&self) {
         self.running
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        self.wake.notify_waiters();
+        self.wake.notify_one();
         let handle = self.worker.lock().await.take();
         if let Some(handle) = handle {
             match tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, handle).await {
@@ -233,7 +233,7 @@ impl PollScheduler {
                 forced: false,
             });
         }
-        self.wake.notify_waiters();
+        self.wake.notify_one();
     }
 
     pub async fn remove_profile(&self, profile_id: &str) {
@@ -262,7 +262,7 @@ impl PollScheduler {
             }
         }
         drop(jobs);
-        self.wake.notify_waiters();
+        self.wake.notify_one();
     }
 }
 

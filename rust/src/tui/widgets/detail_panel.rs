@@ -86,14 +86,22 @@ fn render_listing_text(listing: &Listing, img_index: usize, img_total: usize) ->
         if let Ok(ev) = serde_json::from_str::<serde_json::Value>(eval_json) {
             let notable = ev.get("notable").and_then(|v| v.as_str()).unwrap_or("");
             let reason = ev.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+            let model = ev.get("model").and_then(|v| v.as_str()).unwrap_or("");
             if !notable.is_empty() || !reason.is_empty() {
                 lines.push(Line::raw(""));
-                lines.push(Line::from(Span::styled(
+                let mut header = vec![Span::styled(
                     "AI INSIGHT",
-                    Style::default()
-                        .fg(colors::PINK)
-                        .add_modifier(Modifier::BOLD),
-                )));
+                    Style::default().fg(colors::PINK).add_modifier(Modifier::BOLD),
+                )];
+                // Name the model that produced the verdict (empty on a
+                // passthrough fallback, where no model judged the listing).
+                if !model.is_empty() {
+                    header.push(Span::styled(
+                        format!("  {model}"),
+                        Style::default().fg(colors::TEXT_DIM),
+                    ));
+                }
+                lines.push(Line::from(header));
                 if !notable.is_empty() {
                     lines.push(Line::from(vec![
                         Span::styled(
@@ -210,10 +218,19 @@ impl DetailPanel {
             .unwrap_or(false)
     }
 
-    /// Show a new listing. Returns true if the listing changed.
+    /// Show a listing. Returns true only when the *selection* changed (a
+    /// different id), which the caller uses to re-arm the gallery/hero.
+    ///
+    /// When the same listing is shown again, its mutable content is still
+    /// refreshed in place — the daemon attaches `ai_evaluation` and flips
+    /// `status` after the row already exists, so keeping the stale copy
+    /// would leave AI INSIGHT and the status badge wrong until reselect.
+    /// The image gallery, index, and hero path are deliberately preserved
+    /// so the photo doesn't blank or re-fetch on a mere data update.
     pub fn show_listing(&mut self, listing: Option<Listing>) -> bool {
         if let (Some(new), Some(old)) = (&listing, &self.listing) {
             if new.id == old.id {
+                self.listing = listing;
                 return false;
             }
         }
@@ -418,6 +435,27 @@ mod tests {
         assert!(panel.show_listing(Some(listing_with("a", vec![], None))));
         assert!(!panel.show_listing(Some(listing_with("a", vec![], None))));
         assert!(panel.show_listing(Some(listing_with("b", vec![], None))));
+    }
+
+    #[test]
+    fn show_listing_refreshes_content_on_same_id_but_keeps_image_state() {
+        let mut panel = DetailPanel::new();
+        panel.show_listing(Some(listing_with("a", vec!["a.jpg"], None)));
+        panel.img_idx = 0;
+        panel.hero_image_path = Some(PathBuf::from("/tmp/a.jpg"));
+
+        // Same id, but the daemon has since attached an AI evaluation.
+        let changed = panel.show_listing(Some(listing_with(
+            "a",
+            vec!["a.jpg"],
+            Some(r#"{"relevant":true,"reason":"r","notable":"n","escalate":false}"#),
+        )));
+        // Not a selection change — the caller must not re-arm hero/gallery.
+        assert!(!changed);
+        // But the stored listing now reflects the AI evaluation.
+        assert!(panel.current_listing().unwrap().ai_evaluation.is_some());
+        // And the image state was preserved (not blanked/reset).
+        assert_eq!(panel.hero_image_path, Some(PathBuf::from("/tmp/a.jpg")));
     }
 
     #[test]

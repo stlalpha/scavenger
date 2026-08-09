@@ -226,12 +226,11 @@ impl Database {
                 )?;
             }
         } else {
-            // Update last_seen
-            self.conn.execute(
-                "UPDATE listings SET last_seen=?1 WHERE id=?2",
-                params![last_seen, listing.id],
-            )?;
-            // Check for price change
+            // Read the stored price BEFORE updating so a genuine change can
+            // be detected, then persist the new price alongside last_seen.
+            // (Previously the UPDATE wrote only last_seen, so the price never
+            // changed in the row — every later poll re-detected the same
+            // "change" and appended another price_history row forever.)
             let existing_price: Option<f64> = self
                 .conn
                 .query_row(
@@ -241,6 +240,11 @@ impl Database {
                 )
                 .optional()?
                 .flatten();
+
+            self.conn.execute(
+                "UPDATE listings SET last_seen=?1, price=?2 WHERE id=?3",
+                params![last_seen, listing.price, listing.id],
+            )?;
 
             if let Some(new_price) = listing.price {
                 if existing_price != Some(new_price) {

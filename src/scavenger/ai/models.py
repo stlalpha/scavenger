@@ -44,6 +44,9 @@ class AIEvaluation(BaseModel):
     reason: str
     notable: str | None
     escalate: bool
+    # Model that produced this verdict; empty on a passthrough fallback.
+    # Defaulted so rows/responses without the field still parse.
+    model: str = ""
 
     @classmethod
     def passthrough(cls) -> AIEvaluation:

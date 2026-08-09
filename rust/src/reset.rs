@@ -73,15 +73,24 @@ pub fn run(config: &AppConfig, opts: &ResetOptions) -> Result<ResetOutcome> {
     if opts.listings_only {
         let mut deleted = 0u64;
         if db_path.exists() {
-            let conn = rusqlite::Connection::open(&db_path)
+            let mut conn = rusqlite::Connection::open(&db_path)
+                .map_err(|e| ScavengerError::Database(e.to_string()))?;
+            // Delete both tables in one transaction so a crash in the gap
+            // can't leave price_history orphaned from its listings (or
+            // half-deleted state that looks like a corrupt DB).
+            let tx = conn
+                .transaction()
                 .map_err(|e| ScavengerError::Database(e.to_string()))?;
             // price_history references listings — child rows go first.
-            conn.execute("DELETE FROM price_history", [])
+            tx.execute("DELETE FROM price_history", [])
                 .map_err(|e| ScavengerError::Database(e.to_string()))?;
-            deleted = conn
+            deleted = tx
                 .execute("DELETE FROM listings", [])
                 .map_err(|e| ScavengerError::Database(e.to_string()))?
                 as u64;
+            tx.commit()
+                .map_err(|e| ScavengerError::Database(e.to_string()))?;
+            // VACUUM cannot run inside a transaction; do it after commit.
             conn.execute_batch("VACUUM")
                 .map_err(|e| ScavengerError::Database(e.to_string()))?;
         }

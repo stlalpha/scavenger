@@ -8,6 +8,12 @@ pub struct AIEvaluation {
     pub reason: String,
     pub notable: Option<String>,
     pub escalate: bool,
+    /// The model that produced this verdict (e.g. the local filter model or
+    /// the escalation model). Empty on a passthrough fallback (no model
+    /// judged the listing). `#[serde(default)]` keeps rows written before
+    /// this field parseable.
+    #[serde(default)]
+    pub model: String,
 }
 
 impl AIEvaluation {
@@ -18,6 +24,7 @@ impl AIEvaluation {
             reason: String::new(),
             notable: None,
             escalate: false,
+            model: String::new(),
         }
     }
 }

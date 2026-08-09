@@ -97,11 +97,16 @@ impl<'a> StatusBarWidget<'a> {
         match &self.state.ai {
             Some(ai) if ai.enabled && !ai.healthy => {
                 spans.push(dot());
-                let mut reason = ai.detail.clone();
-                if reason.len() > 44 {
-                    reason.truncate(43);
-                    reason.push('…');
-                }
+                // Truncate by chars, not bytes — ai.detail is a free-form
+                // error string that may hold multibyte characters, and a
+                // byte-index truncate would panic inside the render loop.
+                let reason = if ai.detail.chars().count() > 44 {
+                    let mut s: String = ai.detail.chars().take(43).collect();
+                    s.push('…');
+                    s
+                } else {
+                    ai.detail.clone()
+                };
                 spans.push(Span::styled(
                     format!("AI ✗ {reason}"),
                     Style::default().fg(colors::PINK).add_modifier(Modifier::BOLD),
@@ -140,7 +145,7 @@ impl<'a> StatusBarWidget<'a> {
                 ));
                 spans.push(Span::styled(" · ", Style::default().fg(colors::TEXT_DARK)));
                 spans.push(Span::styled(
-                    src[..2.min(src.len())].to_string(),
+                    src.chars().take(2).collect::<String>(),
                     Style::default().fg(colors::src_color(src)).add_modifier(Modifier::BOLD),
                 ));
             }
@@ -151,7 +156,7 @@ impl<'a> StatusBarWidget<'a> {
             for src in &self.state.active_polls {
                 spans.push(Span::raw(" "));
                 spans.push(Span::styled(
-                    src[..2.min(src.len())].to_string(),
+                    src.chars().take(2).collect::<String>(),
                     Style::default().fg(colors::src_color(src)).add_modifier(Modifier::BOLD),
                 ));
             }
@@ -170,7 +175,7 @@ impl<'a> StatusBarWidget<'a> {
                 if i > 0 {
                     spans.push(Span::raw(" "));
                 }
-                let abbrev = s.plugin_id[..2.min(s.plugin_id.len())].to_string();
+                let abbrev: String = s.plugin_id.chars().take(2).collect();
                 spans.push(Span::styled(
                     abbrev,
                     Style::default().fg(colors::src_color(&s.plugin_id)),

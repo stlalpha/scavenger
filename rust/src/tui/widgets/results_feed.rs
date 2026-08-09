@@ -133,11 +133,7 @@ fn render_card(listing: &Listing) -> Vec<Line<'static>> {
         None => Span::styled("--", Style::default().fg(colors::TEXT_DIMMEST)),
     };
 
-    let src_abbr = if listing.source_id.len() >= 2 {
-        listing.source_id[..2].to_uppercase()
-    } else {
-        listing.source_id.to_uppercase()
-    };
+    let src_abbr: String = listing.source_id.chars().take(2).collect::<String>().to_uppercase();
     let src = Span::styled(src_abbr, Style::default().fg(colors::src_color(&listing.source_id)));
 
     let age = Span::styled(age_str(&listing.first_seen), Style::default().fg(colors::TEXT_DIMMER));
@@ -203,9 +199,22 @@ impl ResultsFeed {
         if from_poll {
             self.awaiting_poll = false;
         }
+        // Include AI presence and price in the fingerprint: the daemon
+        // attaches ai_evaluation (and can revise price) after a listing
+        // already exists without changing id/status, and render_card draws
+        // the "!" notable marker from ai_evaluation — an id:status-only
+        // fingerprint would keep showing the pre-AI cards.
         let fp: String = listings
             .iter()
-            .map(|l| format!("{}:{:?}", l.id, l.status))
+            .map(|l| {
+                format!(
+                    "{}:{:?}:{}:{:?}",
+                    l.id,
+                    l.status,
+                    l.ai_evaluation.is_some(),
+                    l.price
+                )
+            })
             .collect::<Vec<_>>()
             .join("|");
         if fp == self.fingerprint {
@@ -588,5 +597,34 @@ mod tests {
         assert!(feed.update_listings(vec![l.clone()], true));
         l.status = ListingStatus::Seen;
         assert!(feed.update_listings(vec![l], true));
+    }
+
+    #[test]
+    fn update_listings_fingerprint_changes_when_ai_eval_attaches() {
+        // The daemon attaches ai_evaluation after the row exists, without
+        // touching id/status; the feed must re-render so the "!" marker
+        // appears rather than keeping the pre-AI card.
+        let mut feed = ResultsFeed::new();
+        let mut l = listing("a", Some(10.0), 0.0, "ebay", 0);
+        assert!(feed.update_listings(vec![l.clone()], true));
+        assert!(!feed.update_listings(vec![l.clone()], true), "no change yet");
+        l.ai_evaluation = Some(r#"{"relevant":true,"reason":"","notable":"rare","escalate":false}"#.into());
+        assert!(feed.update_listings(vec![l], true), "AI attach must re-render");
+    }
+
+    #[test]
+    fn update_listings_fingerprint_changes_on_price() {
+        let mut feed = ResultsFeed::new();
+        let mut l = listing("a", Some(10.0), 0.0, "ebay", 0);
+        assert!(feed.update_listings(vec![l.clone()], true));
+        l.price = Some(9.0);
+        assert!(feed.update_listings(vec![l], true), "price change must re-render");
+    }
+
+    #[test]
+    fn render_card_source_abbrev_never_panics_on_multibyte_source() {
+        // Byte-slicing a multibyte source id would panic in the render path.
+        let l = listing("a", Some(10.0), 0.0, "é-source", 0);
+        let _ = render_card(&l);
     }
 }

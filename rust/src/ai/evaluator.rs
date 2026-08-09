@@ -308,8 +308,10 @@ impl AIEvaluator {
     }
 
     fn record_health(&self, healthy: bool, detail: impl Into<String>) {
-        let mut detail = detail.into();
-        detail.truncate(160);
+        let detail = detail.into();
+        // Cap by chars, not bytes — the detail is a free-form error string
+        // (model/transport) and a byte-index truncate would panic mid-char.
+        let detail: String = detail.chars().take(160).collect();
         if let Ok(mut h) = self.health.lock() {
             *h = (healthy, detail);
         }
@@ -554,8 +556,11 @@ impl AIEvaluator {
             }
         };
 
-        let evaluation: AIEvaluation = match serde_json::from_str(&content) {
-            Ok(ev) => ev,
+        let evaluation: AIEvaluation = match serde_json::from_str::<AIEvaluation>(&content) {
+            Ok(mut ev) => {
+                ev.model = self.config.filter_model.clone();
+                ev
+            }
             Err(e) => {
                 warn!("Filter parse failed: {e}");
                 return AIEvaluation::passthrough();
@@ -584,6 +589,11 @@ impl AIEvaluator {
                 matched = vec!["(model-triggered)".to_string()];
             }
             let escalation = self.escalate(profile, listing, &matched).await;
+            let model = if escalation.model.is_empty() {
+                evaluation.model.clone()
+            } else {
+                escalation.model.clone()
+            };
             return AIEvaluation {
                 relevant: evaluation.relevant,
                 reason: if escalation.reason.is_empty() {
@@ -593,6 +603,7 @@ impl AIEvaluator {
                 },
                 notable: escalation.notable.or(evaluation.notable),
                 escalate: escalation.escalate,
+                model,
             };
         }
 
@@ -618,12 +629,17 @@ impl AIEvaluator {
             .collect();
 
         let results = futures::future::join_all(futures_vec).await;
-        for result in results {
+        for (chunk, result) in chunks.iter().zip(results) {
             match result {
                 Ok(map) => all_results.extend(map),
                 Err(e) => {
-                    warn!("Batch chunk failed: {e}");
-                    // passthrough handled inside process_batch already
+                    // process_batch (which owns the passthrough fallback)
+                    // never ran here — this Err is the semaphore being
+                    // closed before acquire — so back-fill passthrough for
+                    // the chunk's listings ourselves; otherwise they get no
+                    // verdict at all and are silently dropped downstream.
+                    warn!("Batch chunk failed before evaluation: {e}");
+                    all_results.extend(passthrough_all(chunk));
                 }
             }
         }
@@ -653,6 +669,11 @@ impl AIEvaluator {
                     tokio::time::sleep(ESCALATION_DELAY).await;
                 }
                 let escalation = self.escalate(profile, listing, &matched).await;
+                let model = if escalation.model.is_empty() {
+                    ev.model.clone()
+                } else {
+                    escalation.model.clone()
+                };
                 all_results.insert(
                     listing.id.clone(),
                     AIEvaluation {
@@ -664,6 +685,7 @@ impl AIEvaluator {
                         },
                         notable: escalation.notable.or(ev.notable.clone()),
                         escalate: escalation.escalate,
+                        model,
                     },
                 );
                 escalation_count += 1;
@@ -724,6 +746,7 @@ impl AIEvaluator {
                                 reason: item.reason,
                                 notable: item.notable,
                                 escalate: item.escalate,
+                                model: self.config.filter_model.clone(),
                             },
                         );
                     }
@@ -768,8 +791,11 @@ impl AIEvaluator {
     ) -> AIEvaluation {
         let (system, user) = build_escalation_prompt(profile, listing, triggered_keywords);
         match self.call_frontier(&system, &user).await {
-            Ok(content) => match serde_json::from_str(&content) {
-                Ok(ev) => ev,
+            Ok(content) => match serde_json::from_str::<AIEvaluation>(&content) {
+                Ok(mut ev) => {
+                    ev.model = self.escalation_model.clone();
+                    ev
+                }
                 Err(e) => {
                     warn!(
                         "Escalation parse failed for {}: {e}",
@@ -882,6 +908,18 @@ mod tests {
         assert!(!model_available(&installed, "qwen3:8b"));
         assert!(!model_available(&installed, "mistral"));
         assert!(!model_available(&[], "qwen3:32b"));
+    }
+
+    #[test]
+    fn record_health_truncates_multibyte_detail_without_panicking() {
+        let ev = AIEvaluator::new(AIConfig::default());
+        // 200 accented chars: a byte-index truncate at 160 would land
+        // mid-character and panic; the char-safe version must not.
+        let detail: String = "é".repeat(200);
+        ev.record_health(false, detail);
+        let snap = ev.health_snapshot();
+        assert!(!snap.healthy);
+        assert_eq!(snap.detail.chars().count(), 160);
     }
 
     #[test]
