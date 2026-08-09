@@ -7,21 +7,30 @@ use crate::error::{Result, ScavengerError};
 use crate::ai::models::AIConfig;
 use crate::models::Profile;
 
-/// Write `contents` to `path` atomically: write a temp file in the same
-/// directory, fsync it, then rename it over the destination (an atomic
-/// operation on the same filesystem). A crash or disk error can no longer
-/// leave a truncated or empty config — the old file survives intact until
-/// the rename succeeds.
+/// Monotonic per-process counter for unique temp file names.
+static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Write `contents` to `path` atomically: write to an exclusive,
+/// uniquely-named temp file in the same directory, fsync it, then rename it
+/// over the destination (atomic on the same filesystem). A crash or disk
+/// error can no longer leave a truncated or empty config — the old file
+/// survives intact until the rename succeeds. The temp name is unique per
+/// call (pid + counter) and opened with `create_new` (O_EXCL), so two
+/// concurrent writes can never share an inode and clobber each other.
 fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "config.toml".to_string());
-    let tmp = dir.join(format!(".{file_name}.tmp.{}", std::process::id()));
+    let n = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{file_name}.tmp.{}.{n}", std::process::id()));
 
     let write_tmp = || -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&tmp)?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true) // O_EXCL: fail rather than reuse an existing temp
+            .open(&tmp)?;
         f.write_all(contents.as_bytes())?;
         f.sync_all()?;
         Ok(())
@@ -403,5 +412,47 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .collect();
         assert!(leftovers.is_empty(), "temp file left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn atomic_write_is_safe_under_concurrent_writers() {
+        // Many threads hammer the same path with different full contents.
+        // Each write is all-or-nothing; the final file must be exactly one
+        // of the written payloads, never a torn/mixed blend, and no temp
+        // files may be left behind.
+        use std::sync::Arc;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = Arc::new(dir.path().join("config.toml"));
+        let payloads: Vec<String> = (0..16)
+            .map(|i| format!("value = {}\n{}", i, "x".repeat(4096)))
+            .collect();
+
+        let handles: Vec<_> = payloads
+            .clone()
+            .into_iter()
+            .map(|body| {
+                let p = path.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..25 {
+                        atomic_write(&p, &body).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let final_contents = std::fs::read_to_string(&*path).unwrap();
+        assert!(
+            payloads.contains(&final_contents),
+            "final file is a torn write, not any single payload"
+        );
+        let leftovers = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .count();
+        assert_eq!(leftovers, 0, "temp files left behind under concurrency");
     }
 }
