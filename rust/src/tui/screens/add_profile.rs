@@ -475,9 +475,7 @@ impl ProfileForm {
 
     /// Request delete (shows confirmation, then returns FormResult::Delete).
     pub fn request_delete(&mut self) -> Option<FormResult> {
-        if self.editing.is_none() {
-            return None;
-        }
+        self.editing.as_ref()?;
         if !self.confirm_delete {
             self.confirm_delete = true;
             return None;
@@ -530,13 +528,47 @@ impl ProfileForm {
             return;
         }
 
-        // Lay out fields vertically
-        let mut y = inner.y;
-        let field_area = |y: &mut u16, height: u16| -> Rect {
-            let r = Rect::new(inner.x + 1, *y, inner.width.saturating_sub(2), height);
-            *y += height;
-            r
-        };
+        // Field groups, each an indivisible unit of rows (label/hint/input/
+        // spacer). Rendering only ever draws a group whole, never split
+        // across the visible/hidden boundary, so nothing can paint past
+        // the dialog border and Tab always keeps the focused group intact.
+        const GROUP_HEIGHTS: [u16; 9] = [3, 4, 3, 3, 3, 3, 3, 4, 3];
+
+        fn group_for_field(field: FormField) -> usize {
+            match field {
+                FormField::Name => 0,
+                FormField::Keywords => 1,
+                FormField::NegativeKeywords => 2,
+                FormField::SourceEbay | FormField::SourceFacebook | FormField::SourceCraigslist => 3,
+                FormField::PriceMin | FormField::PriceMax => 4,
+                FormField::PollInterval | FormField::Priority => 5,
+                FormField::Tags => 6,
+                FormField::EscalationKeywords => 7,
+                FormField::LocationRadius => 8,
+            }
+        }
+
+        let has_error = self.error_msg.is_some();
+        let n_groups = GROUP_HEIGHTS.len();
+        let mut offsets = vec![0u16; n_groups + 1];
+        for i in 0..GROUP_HEIGHTS.len() {
+            offsets[i + 1] = offsets[i] + GROUP_HEIGHTS[i];
+        }
+
+        // Reserve the bottom row for the hint bar, and a second one above it
+        // for the error message when present, so both are always visible
+        // independent of how much of the field stack fits above them.
+        let body_height = inner.height.saturating_sub(if has_error { 2 } else { 1 });
+
+        // Scroll just far enough to keep the focused field's whole group
+        // on screen, preferring to show as much preceding content as fits.
+        let focused_group = group_for_field(self.focused);
+        let focused_start = offsets[focused_group];
+        let focused_end = offsets[focused_group + 1];
+        let mut scroll = focused_end.saturating_sub(body_height);
+        if focused_start < scroll {
+            scroll = focused_start;
+        }
 
         let render_label = |area: Rect, buf: &mut Buffer, label: &str| {
             Paragraph::new(Span::styled(
@@ -566,13 +598,19 @@ impl ProfileForm {
                 } else {
                     Style::default().fg(colors::INDICATOR_ACTIVE)
                 });
-            let inner = block.inner(area);
+            let text_area = block.inner(area);
             Widget::render(block, area, buf);
-            Paragraph::new(value).style(style).render(inner, buf);
-            // Show cursor
-            if focused && inner.width > 0 {
-                let cx = inner.x + (cursor_pos as u16).min(inner.width - 1);
-                if let Some(cell) = buf.cell_mut((cx, inner.y)) {
+            if text_area.width == 0 {
+                return;
+            }
+            let (display_col, scroll) = caret_scroll(value, cursor_pos, text_area.width);
+            Paragraph::new(value)
+                .style(style)
+                .scroll((0, scroll))
+                .render(text_area, buf);
+            if focused {
+                let cx = text_area.x + (display_col - scroll).min(text_area.width - 1);
+                if let Some(cell) = buf.cell_mut((cx, text_area.y)) {
                     cell.set_style(Style::default().add_modifier(Modifier::REVERSED));
                 }
             }
@@ -602,156 +640,154 @@ impl ProfileForm {
                 .render(area, buf);
         };
 
-        // Name
-        if y < inner.y + inner.height {
-            render_label(field_area(&mut y, 1), buf, "Name");
-            render_input(
-                field_area(&mut y, 2),
-                buf,
-                &self.name,
-                self.focused == FormField::Name,
-                self.cursor_pos,
-            );
-        }
+        for group in 0..n_groups {
+            let start = offsets[group];
+            let end = offsets[group + 1];
+            if start < scroll || end > scroll + body_height {
+                continue;
+            }
+            let mut y = inner.y + (start - scroll);
+            let field_area = |y: &mut u16, height: u16| -> Rect {
+                let r = Rect::new(inner.x + 1, *y, inner.width.saturating_sub(2), height);
+                *y += height;
+                r
+            };
 
-        // Keywords
-        if y < inner.y + inner.height {
-            render_label(field_area(&mut y, 1), buf, "Keywords");
-            render_hint(field_area(&mut y, 1), buf, "comma-separated, | for OR groups");
-            render_input(
-                field_area(&mut y, 2),
-                buf,
-                &self.keywords,
-                self.focused == FormField::Keywords,
-                self.cursor_pos,
-            );
-        }
+            match group {
+                0 => {
+                    render_label(field_area(&mut y, 1), buf, "Name");
+                    render_input(
+                        field_area(&mut y, 2),
+                        buf,
+                        &self.name,
+                        self.focused == FormField::Name,
+                        self.cursor_pos,
+                    );
+                }
+                1 => {
+                    render_label(field_area(&mut y, 1), buf, "Keywords");
+                    render_hint(field_area(&mut y, 1), buf, "comma-separated, | for OR groups");
+                    render_input(
+                        field_area(&mut y, 2),
+                        buf,
+                        &self.keywords,
+                        self.focused == FormField::Keywords,
+                        self.cursor_pos,
+                    );
+                }
+                2 => {
+                    render_label(field_area(&mut y, 1), buf, "Negative keywords");
+                    render_input(
+                        field_area(&mut y, 2),
+                        buf,
+                        &self.negative_keywords,
+                        self.focused == FormField::NegativeKeywords,
+                        self.cursor_pos,
+                    );
+                }
+                3 => {
+                    render_label(field_area(&mut y, 1), buf, "Sources");
+                    let src_row = field_area(&mut y, 1);
+                    let thirds = Layout::horizontal([
+                        Constraint::Ratio(1, 3),
+                        Constraint::Ratio(1, 3),
+                        Constraint::Ratio(1, 3),
+                    ])
+                    .split(src_row);
+                    render_checkbox(thirds[0], buf, "eBay", self.src_ebay, self.focused == FormField::SourceEbay);
+                    render_checkbox(thirds[1], buf, "Facebook", self.src_facebook, self.focused == FormField::SourceFacebook);
+                    render_checkbox(thirds[2], buf, "Craigslist", self.src_craigslist, self.focused == FormField::SourceCraigslist);
+                }
+                4 => {
+                    render_label(field_area(&mut y, 1), buf, "Price range");
+                    let price_row = field_area(&mut y, 2);
+                    let [min_area, sep_area, max_area] = Layout::horizontal([
+                        Constraint::Ratio(2, 5),
+                        Constraint::Length(5),
+                        Constraint::Ratio(2, 5),
+                    ])
+                    .areas(price_row);
+                    render_input(min_area, buf, &self.price_min, self.focused == FormField::PriceMin, self.cursor_pos);
+                    Paragraph::new(" to ")
+                        .style(Style::default().fg(colors::TEXT_DIM))
+                        .alignment(Alignment::Center)
+                        .render(sep_area, buf);
+                    render_input(max_area, buf, &self.price_max, self.focused == FormField::PriceMax, self.cursor_pos);
+                }
+                5 => {
+                    let pair_row = field_area(&mut y, 1);
+                    let [left, right] = Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+                        .areas(pair_row);
+                    Paragraph::new(Span::styled(
+                        "Poll every",
+                        Style::default().fg(colors::TEXT_PRIMARY).add_modifier(Modifier::BOLD),
+                    )).render(left, buf);
+                    Paragraph::new(Span::styled(
+                        "Priority",
+                        Style::default().fg(colors::TEXT_PRIMARY).add_modifier(Modifier::BOLD),
+                    )).render(right, buf);
 
-        // Negative keywords
-        if y < inner.y + inner.height {
-            render_label(field_area(&mut y, 1), buf, "Negative keywords");
-            render_input(
-                field_area(&mut y, 2),
-                buf,
-                &self.negative_keywords,
-                self.focused == FormField::NegativeKeywords,
-                self.cursor_pos,
-            );
-        }
-
-        // Sources
-        if y < inner.y + inner.height {
-            render_label(field_area(&mut y, 1), buf, "Sources");
-            let src_row = field_area(&mut y, 1);
-            let thirds = Layout::horizontal([
-                Constraint::Ratio(1, 3),
-                Constraint::Ratio(1, 3),
-                Constraint::Ratio(1, 3),
-            ])
-            .split(src_row);
-            render_checkbox(thirds[0], buf, "eBay", self.src_ebay, self.focused == FormField::SourceEbay);
-            render_checkbox(thirds[1], buf, "Facebook", self.src_facebook, self.focused == FormField::SourceFacebook);
-            render_checkbox(thirds[2], buf, "Craigslist", self.src_craigslist, self.focused == FormField::SourceCraigslist);
-            y += 1; // spacer
-        }
-
-        // Price range
-        if y < inner.y + inner.height {
-            render_label(field_area(&mut y, 1), buf, "Price range");
-            let price_row = field_area(&mut y, 2);
-            let [min_area, sep_area, max_area] = Layout::horizontal([
-                Constraint::Ratio(2, 5),
-                Constraint::Length(5),
-                Constraint::Ratio(2, 5),
-            ])
-            .areas(price_row);
-            render_input(min_area, buf, &self.price_min, self.focused == FormField::PriceMin, self.cursor_pos);
-            Paragraph::new(" to ")
-                .style(Style::default().fg(colors::TEXT_DIM))
-                .alignment(Alignment::Center)
-                .render(sep_area, buf);
-            render_input(max_area, buf, &self.price_max, self.focused == FormField::PriceMax, self.cursor_pos);
-        }
-
-        // Poll interval + Priority
-        if y < inner.y + inner.height {
-            let pair_row = field_area(&mut y, 1);
-            let [left, right] = Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-                .areas(pair_row);
-            Paragraph::new(Span::styled(
-                "Poll every",
-                Style::default().fg(colors::TEXT_PRIMARY).add_modifier(Modifier::BOLD),
-            )).render(left, buf);
-            Paragraph::new(Span::styled(
-                "Priority",
-                Style::default().fg(colors::TEXT_PRIMARY).add_modifier(Modifier::BOLD),
-            )).render(right, buf);
-
-            let select_row = field_area(&mut y, 1);
-            let [left, right] = Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-                .areas(select_row);
-            let poll_labels: Vec<&str> = POLL_OPTIONS.iter().map(|&(l, _)| l).collect();
-            render_select(left, buf, &poll_labels, self.poll_interval_idx, self.focused == FormField::PollInterval);
-            render_select(right, buf, PRIORITY_OPTIONS, self.priority_idx, self.focused == FormField::Priority);
-            y += 1; // spacer
-        }
-
-        // Tags
-        if y < inner.y + inner.height {
-            render_label(field_area(&mut y, 1), buf, "Tags");
-            render_input(
-                field_area(&mut y, 2),
-                buf,
-                &self.tags,
-                self.focused == FormField::Tags,
-                self.cursor_pos,
-            );
-        }
-
-        // Escalation keywords
-        if y < inner.y + inner.height {
-            render_label(field_area(&mut y, 1), buf, "Escalation keywords");
-            render_hint(field_area(&mut y, 1), buf, "trigger deeper AI eval");
-            render_input(
-                field_area(&mut y, 2),
-                buf,
-                &self.escalation_keywords,
-                self.focused == FormField::EscalationKeywords,
-                self.cursor_pos,
-            );
-        }
-
-        // Location radius
-        if y < inner.y + inner.height {
-            render_label(field_area(&mut y, 1), buf, "Location radius (miles)");
-            render_input(
-                field_area(&mut y, 2),
-                buf,
-                &self.location_radius,
-                self.focused == FormField::LocationRadius,
-                self.cursor_pos,
-            );
-        }
-
-        // Error message
-        if let Some(ref err) = self.error_msg {
-            if y < inner.y + inner.height {
-                y += 1;
-                let err_area = field_area(&mut y, 1);
-                Paragraph::new(Span::styled(
-                    err.clone(),
-                    Style::default().fg(colors::PINK),
-                ))
-                .render(err_area, buf);
+                    let select_row = field_area(&mut y, 1);
+                    let [left, right] = Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+                        .areas(select_row);
+                    let poll_labels: Vec<&str> = POLL_OPTIONS.iter().map(|&(l, _)| l).collect();
+                    render_select(left, buf, &poll_labels, self.poll_interval_idx, self.focused == FormField::PollInterval);
+                    render_select(right, buf, PRIORITY_OPTIONS, self.priority_idx, self.focused == FormField::Priority);
+                }
+                6 => {
+                    render_label(field_area(&mut y, 1), buf, "Tags");
+                    render_input(
+                        field_area(&mut y, 2),
+                        buf,
+                        &self.tags,
+                        self.focused == FormField::Tags,
+                        self.cursor_pos,
+                    );
+                }
+                7 => {
+                    render_label(field_area(&mut y, 1), buf, "Escalation keywords");
+                    render_hint(field_area(&mut y, 1), buf, "trigger deeper AI eval");
+                    render_input(
+                        field_area(&mut y, 2),
+                        buf,
+                        &self.escalation_keywords,
+                        self.focused == FormField::EscalationKeywords,
+                        self.cursor_pos,
+                    );
+                }
+                8 => {
+                    render_label(field_area(&mut y, 1), buf, "Location radius (miles)");
+                    render_input(
+                        field_area(&mut y, 2),
+                        buf,
+                        &self.location_radius,
+                        self.focused == FormField::LocationRadius,
+                        self.cursor_pos,
+                    );
+                }
+                _ => unreachable!(),
             }
         }
 
-        // Delete confirmation overlay
+        // Error message — pinned above the hint bar, independent of scroll,
+        // so a validation failure is always visible instead of landing past
+        // the field stack's scroll window.
+        if let Some(ref err) = self.error_msg {
+            let err_y = inner.y + inner.height - 2;
+            let err_area = Rect::new(inner.x + 1, err_y, inner.width.saturating_sub(2), 1);
+            Paragraph::new(Span::styled(err.clone(), Style::default().fg(colors::PINK)))
+                .render(err_area, buf);
+        }
+
+        // Delete confirmation — a fixed centered overlay independent of the
+        // field stack above, so it's always visible regardless of terminal
+        // size or scroll position (the field stack, by contrast, can hide
+        // fields and would otherwise hide this too on short terminals).
         if self.confirm_delete {
-            if y + 2 < inner.y + inner.height {
-                y += 1;
-                let confirm_area = field_area(&mut y, 2);
-                Paragraph::new(vec![
+            render_confirm_overlay(
+                area,
+                buf,
+                &[
                     Line::from(Span::styled(
                         "Delete this profile and all its listings?",
                         Style::default().fg(colors::PINK),
@@ -759,37 +795,490 @@ impl ProfileForm {
                     Line::from(vec![
                         Span::styled("y", Style::default().fg(colors::ORANGE)),
                         Span::styled("es", Style::default().fg(colors::TEXT_DIM)),
-                        Span::raw("  "),
+                        Span::raw("   "),
                         Span::styled("n", Style::default().fg(colors::ORANGE)),
                         Span::styled("o", Style::default().fg(colors::TEXT_DIM)),
                     ]),
-                ])
-                .render(confirm_area, buf);
-            }
+                ],
+            );
         }
 
-        // Bottom buttons hint
-        let bottom_y = (inner.y + inner.height).saturating_sub(1);
-        if bottom_y > y {
-            let btn_area = Rect::new(inner.x + 1, bottom_y, inner.width.saturating_sub(2), 1);
-            let mut btn_spans = vec![
-                Span::styled("Esc", Style::default().fg(colors::ORANGE)),
-                Span::styled(" cancel", Style::default().fg(colors::TEXT_DIM)),
-                Span::raw("  "),
-                Span::styled("Enter", Style::default().fg(colors::ORANGE)),
-                Span::styled(
-                    if self.is_editing() { " save" } else { " create" },
-                    Style::default().fg(colors::TEXT_DIM),
-                ),
-            ];
-            if self.is_editing() {
-                btn_spans.push(Span::raw("  "));
-                btn_spans.push(Span::styled("Del", Style::default().fg(colors::PINK)));
-                btn_spans.push(Span::styled(" delete", Style::default().fg(colors::TEXT_DIM)));
-            }
-            Paragraph::new(Line::from(btn_spans))
-                .alignment(Alignment::Right)
-                .render(btn_area, buf);
+        // Bottom buttons hint — pinned to the dialog's last inner row
+        // regardless of how much of the field stack is visible above it.
+        let bottom_y = inner.y + inner.height - 1;
+        let btn_area = Rect::new(inner.x + 1, bottom_y, inner.width.saturating_sub(2), 1);
+        let mut btn_spans = vec![
+            Span::styled("Esc", Style::default().fg(colors::ORANGE)),
+            Span::styled(" cancel", Style::default().fg(colors::TEXT_DIM)),
+            Span::raw("  "),
+            Span::styled("Enter", Style::default().fg(colors::ORANGE)),
+            Span::styled(
+                if self.is_editing() { " save" } else { " create" },
+                Style::default().fg(colors::TEXT_DIM),
+            ),
+        ];
+        if self.is_editing() {
+            btn_spans.push(Span::raw("  "));
+            btn_spans.push(Span::styled("Del", Style::default().fg(colors::PINK)));
+            btn_spans.push(Span::styled(" delete", Style::default().fg(colors::TEXT_DIM)));
         }
+        Paragraph::new(Line::from(btn_spans))
+            .alignment(Alignment::Right)
+            .render(btn_area, buf);
+    }
+}
+
+/// Display column and horizontal scroll offset for a text input's caret.
+/// `cursor_pos` is a byte offset into `value`; display column is
+/// approximated as a char count (not full unicode-width) since this crate
+/// doesn't carry `unicode-width` as a direct dependency — good enough to
+/// keep the caret roughly aligned for the common case, exact for pure-ASCII
+/// input.
+fn caret_scroll(value: &str, cursor_pos: usize, width: u16) -> (u16, u16) {
+    let display_col = value[..cursor_pos.min(value.len())].chars().count() as u16;
+    let scroll = display_col.saturating_sub(width.saturating_sub(1));
+    (display_col, scroll)
+}
+
+/// Small centered confirmation overlay, laid out independently of any
+/// dialog's field stack so it can never be scrolled or clipped off-screen.
+/// Shared by the profile-delete and daemon-quit confirmations.
+pub fn render_confirm_overlay(area: Rect, buf: &mut Buffer, lines: &[Line<'static>]) {
+    let width = 44u16.min(area.width.saturating_sub(2));
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let [overlay] = Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [overlay] = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(overlay);
+
+    Clear.render(overlay, buf);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colors::PINK))
+        .style(Style::default().bg(colors::BG_DETAIL));
+    let inner = block.inner(overlay);
+    Widget::render(block, overlay, buf);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    Paragraph::new(lines.to_vec())
+        .alignment(Alignment::Center)
+        .render(inner, buf);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AlertPriority, KeywordGroup};
+
+    #[test]
+    fn parse_keywords_single_terms() {
+        let groups = parse_keywords("bike, helmet");
+        assert_eq!(
+            groups,
+            vec![
+                KeywordGroup::Single("bike".into()),
+                KeywordGroup::Single("helmet".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_keywords_or_group_syntax() {
+        let groups = parse_keywords("road bike|gravel bike, helmet");
+        assert_eq!(
+            groups,
+            vec![
+                KeywordGroup::Any(vec!["road bike".into(), "gravel bike".into()]),
+                KeywordGroup::Single("helmet".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_keywords_trims_whitespace_and_drops_empty_entries() {
+        let groups = parse_keywords(" bike ,, helmet|pads ");
+        assert_eq!(
+            groups,
+            vec![
+                KeywordGroup::Single("bike".into()),
+                KeywordGroup::Any(vec!["helmet".into(), "pads".into()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_keywords_blank_input_yields_no_groups() {
+        assert!(parse_keywords("").is_empty());
+        assert!(parse_keywords("   ,  ,  ").is_empty());
+    }
+
+    #[test]
+    fn keywords_to_string_round_trips_through_parse() {
+        let original = "bike, road|gravel, helmet";
+        let groups = parse_keywords(original);
+        let rendered = keywords_to_string(&groups);
+        assert_eq!(rendered, "bike, road|gravel, helmet");
+        assert_eq!(parse_keywords(&rendered), groups);
+    }
+
+    #[test]
+    fn id_from_name_lowercases_and_hyphenates() {
+        assert_eq!(id_from_name("Mountain Bikes!"), "mountain-bikes");
+        assert_eq!(id_from_name("  Vinyl -- Records  "), "vinyl-records");
+    }
+
+    fn filled_form() -> ProfileForm {
+        let mut form = ProfileForm::new(None);
+        form.name = "Mountain Bikes".into();
+        form.keywords = "bike, road|gravel".into();
+        form.src_ebay = true;
+        form.src_facebook = false;
+        form.src_craigslist = false;
+        form
+    }
+
+    #[test]
+    fn submit_requires_name() {
+        let mut form = filled_form();
+        form.name.clear();
+        assert!(form.submit().is_none());
+        assert_eq!(form.error_msg.as_deref(), Some("Name is required"));
+    }
+
+    #[test]
+    fn submit_requires_keywords() {
+        let mut form = filled_form();
+        form.keywords.clear();
+        assert!(form.submit().is_none());
+        assert_eq!(
+            form.error_msg.as_deref(),
+            Some("At least one keyword is required")
+        );
+    }
+
+    #[test]
+    fn submit_requires_a_source() {
+        let mut form = filled_form();
+        form.src_ebay = false;
+        assert!(form.submit().is_none());
+        assert_eq!(form.error_msg.as_deref(), Some("Select at least one source"));
+    }
+
+    #[test]
+    fn submit_rejects_non_numeric_price_min() {
+        let mut form = filled_form();
+        form.price_min = "cheap".into();
+        assert!(form.submit().is_none());
+        assert_eq!(form.error_msg.as_deref(), Some("Invalid minimum price"));
+    }
+
+    #[test]
+    fn submit_rejects_non_numeric_price_max() {
+        let mut form = filled_form();
+        form.price_max = "lots".into();
+        assert!(form.submit().is_none());
+        assert_eq!(form.error_msg.as_deref(), Some("Invalid maximum price"));
+    }
+
+    #[test]
+    fn submit_rejects_non_numeric_radius() {
+        let mut form = filled_form();
+        form.location_radius = "far".into();
+        assert!(form.submit().is_none());
+        assert_eq!(form.error_msg.as_deref(), Some("Invalid radius"));
+    }
+
+    #[test]
+    fn submit_rejects_negative_radius() {
+        let mut form = filled_form();
+        form.location_radius = "-5".into();
+        assert!(form.submit().is_none());
+        assert_eq!(form.error_msg.as_deref(), Some("Invalid radius"));
+    }
+
+    #[test]
+    fn submit_new_profile_yields_create_with_derived_id() {
+        let mut form = filled_form();
+        form.price_min = "50".into();
+        form.price_max = "500".into();
+        form.location_radius = "25".into();
+        match form.submit() {
+            Some(FormResult::Create(data)) => {
+                assert_eq!(data.id, "mountain-bikes");
+                assert_eq!(data.name, "Mountain Bikes");
+                assert_eq!(data.sources, vec!["ebay".to_string()]);
+                assert_eq!(data.price_min, Some(50.0));
+                assert_eq!(data.price_max, Some(500.0));
+                assert_eq!(data.location_radius_mi, Some(25));
+                assert_eq!(
+                    data.keywords,
+                    vec![
+                        KeywordGroup::Single("bike".into()),
+                        KeywordGroup::Any(vec!["road".into(), "gravel".into()]),
+                    ]
+                );
+            }
+            other => panic!("expected Create, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submit_editing_profile_yields_update_preserving_id() {
+        let existing = Profile {
+            id: "bikes".into(),
+            name: "Old Name".into(),
+            keywords: vec![KeywordGroup::Single("bike".into())],
+            negative_keywords: vec![],
+            sources: vec!["ebay".into()],
+            price_min: None,
+            price_max: None,
+            poll_interval_sec: 3600,
+            alert_priority: AlertPriority::Normal,
+            enabled: true,
+            tags: vec![],
+            escalation_keywords: vec![],
+            location_radius_mi: None,
+        };
+        let mut form = ProfileForm::new(Some(existing));
+        form.name = "New Name".into();
+        match form.submit() {
+            Some(FormResult::Update(data)) => {
+                assert_eq!(data.id, "bikes");
+                assert_eq!(data.name, "New Name");
+            }
+            other => panic!("expected Update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_delete_requires_two_confirmations() {
+        let existing = Profile {
+            id: "bikes".into(),
+            name: "Bikes".into(),
+            keywords: vec![KeywordGroup::Single("bike".into())],
+            negative_keywords: vec![],
+            sources: vec!["ebay".into()],
+            price_min: None,
+            price_max: None,
+            poll_interval_sec: 3600,
+            alert_priority: AlertPriority::Normal,
+            enabled: true,
+            tags: vec![],
+            escalation_keywords: vec![],
+            location_radius_mi: None,
+        };
+        let mut form = ProfileForm::new(Some(existing));
+
+        assert!(form.request_delete().is_none());
+        assert!(form.confirm_delete);
+
+        match form.request_delete() {
+            Some(FormResult::Delete { id }) => assert_eq!(id, "bikes"),
+            other => panic!("expected Delete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_delete_on_new_profile_is_a_noop() {
+        let mut form = ProfileForm::new(None);
+        assert!(form.request_delete().is_none());
+        assert!(!form.confirm_delete);
+    }
+
+    #[test]
+    fn cancel_delete_clears_confirmation_state() {
+        let mut form = filled_form();
+        form.confirm_delete = true;
+        form.cancel_delete();
+        assert!(!form.confirm_delete);
+    }
+
+    // -- caret_scroll: display-column and horizontal-scroll math (F3) --
+
+    #[test]
+    fn caret_scroll_stays_put_when_text_fits() {
+        let (col, scroll) = caret_scroll("bike", 4, 20);
+        assert_eq!(col, 4);
+        assert_eq!(scroll, 0);
+    }
+
+    #[test]
+    fn caret_scroll_advances_once_cursor_passes_the_visible_width() {
+        let value = "a".repeat(30);
+        let (col, scroll) = caret_scroll(&value, 30, 10);
+        assert_eq!(col, 30);
+        // Caret pinned to the last visible column (width - 1).
+        assert_eq!(scroll, 30 - 9);
+        assert_eq!(col - scroll, 9);
+    }
+
+    #[test]
+    fn caret_scroll_tracks_cursor_in_the_middle_of_long_text() {
+        let value = "a".repeat(30);
+        // Cursor sitting well inside the string, past the visible window.
+        let (col, scroll) = caret_scroll(&value, 20, 10);
+        assert_eq!(col, 20);
+        assert_eq!(scroll, 20 - 9);
+    }
+
+    #[test]
+    fn caret_scroll_uses_char_count_not_byte_length_for_multibyte_text() {
+        // "é" is 2 bytes in UTF-8 but one display column under this
+        // approximation — a byte-offset caret would land one column short.
+        let value = "éé";
+        assert_eq!(value.len(), 4);
+        let (col, scroll) = caret_scroll(value, value.len(), 20);
+        assert_eq!(col, 2);
+        assert_eq!(scroll, 0);
+    }
+
+    #[test]
+    fn caret_scroll_at_cursor_zero_is_flush_left() {
+        let (col, scroll) = caret_scroll("bike", 0, 20);
+        assert_eq!(col, 0);
+        assert_eq!(scroll, 0);
+    }
+
+    // -- render(): field-stack scrolling and overlay placement (F1/F2) --
+
+    fn buffer_text(buf: &Buffer) -> String {
+        let area = buf.area;
+        let mut out = String::new();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                out.push_str(buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Below the ~29 rows the full field stack needs, the focused field
+    /// must still render fully inside the dialog border, and the hint row
+    /// must still be pinned at the bottom — never pushed off-screen or
+    /// painted past the border.
+    #[test]
+    fn short_terminal_keeps_focused_field_and_hint_row_on_screen() {
+        let area = Rect::new(0, 0, 80, 20);
+        let mut buf = Buffer::empty(area);
+        let mut form = ProfileForm::new(None);
+        // Focus the last field in the stack — on a short terminal this is
+        // exactly the one a naive fixed layout would clip or overflow.
+        for _ in 0..(FormField::ALL.len() - 1) {
+            form.focus_next();
+        }
+        assert_eq!(form.focused_field(), FormField::LocationRadius);
+
+        form.render(area, &mut buf);
+
+        let text = buffer_text(&buf);
+        assert!(
+            text.contains("Location radius"),
+            "focused field's label should be visible, got:\n{text}"
+        );
+        assert!(
+            text.contains("Esc") && text.contains("cancel"),
+            "hint row should always be pinned and visible, got:\n{text}"
+        );
+    }
+
+    /// The delete confirmation must render even on a terminal far too
+    /// short for the full field stack — it's a standalone overlay, not
+    /// appended after the fields.
+    #[test]
+    fn delete_confirmation_renders_on_a_short_terminal() {
+        let existing = Profile {
+            id: "bikes".into(),
+            name: "Bikes".into(),
+            keywords: vec![KeywordGroup::Single("bike".into())],
+            negative_keywords: vec![],
+            sources: vec!["ebay".into()],
+            price_min: None,
+            price_max: None,
+            poll_interval_sec: 3600,
+            alert_priority: AlertPriority::Normal,
+            enabled: true,
+            tags: vec![],
+            escalation_keywords: vec![],
+            location_radius_mi: None,
+        };
+        let area = Rect::new(0, 0, 80, 20);
+        let mut buf = Buffer::empty(area);
+        let mut form = ProfileForm::new(Some(existing));
+        form.confirm_delete = true;
+
+        form.render(area, &mut buf);
+
+        let text = buffer_text(&buf);
+        assert!(
+            text.contains("Delete this profile"),
+            "delete confirmation must always render, got:\n{text}"
+        );
+    }
+
+    /// A long value scrolls so the caret stays visible instead of running
+    /// off the edge of the input box.
+    #[test]
+    fn long_field_value_keeps_caret_within_the_dialog_border() {
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        let mut form = ProfileForm::new(None);
+        form.name = "a".repeat(120);
+        form.type_char('!'); // moves cursor to the end, past any fixed width
+
+        form.render(area, &mut buf);
+
+        // The dialog is 64 cols wide with a 1-col border and 1-col margin
+        // on each side, so the input can never legitimately need a column
+        // outside the dialog's own bounds.
+        let dialog_right = {
+            let dialog_width = 64u16.min(area.width.saturating_sub(4));
+            (area.width - dialog_width) / 2 + dialog_width
+        };
+        let mut found_reversed = false;
+        for x in area.left()..area.right() {
+            for y in area.top()..area.bottom() {
+                if buf.cell((x, y)).is_some_and(|c| c.modifier.contains(Modifier::REVERSED)) {
+                    found_reversed = true;
+                    assert!(
+                        x < dialog_right,
+                        "caret at column {x} rendered outside the dialog (right edge {dialog_right})"
+                    );
+                }
+            }
+        }
+        assert!(found_reversed, "expected a reversed caret cell somewhere in the buffer");
+    }
+
+    /// On a normal-sized 80x24 terminal, submitting an empty form must show
+    /// the validation error alongside the hint row — not silently drop it
+    /// past the scroll window.
+    #[test]
+    fn validation_error_is_visible_on_a_standard_terminal() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        let mut form = ProfileForm::new(None);
+
+        assert!(form.submit().is_none());
+        assert_eq!(form.error_msg.as_deref(), Some("Name is required"));
+
+        form.render(area, &mut buf);
+
+        let text = buffer_text(&buf);
+        assert!(
+            text.contains("Name is required"),
+            "validation error should be visible, got:\n{text}"
+        );
+        assert!(
+            text.contains("Esc") && text.contains("cancel"),
+            "hint row should still be pinned and visible, got:\n{text}"
+        );
     }
 }

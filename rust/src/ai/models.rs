@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
 
 /// Result of AI evaluation for a single listing.
@@ -55,7 +54,9 @@ fn default_filter_model() -> String {
     "qwen3.5:9b".to_string()
 }
 fn default_filter_timeout() -> f64 {
-    30.0
+    // Local models chew through 10-listing batches; 30s starves a batch
+    // queued behind Ollama's serial request handling.
+    120.0
 }
 fn default_escalation_model() -> String {
     "claude-haiku-4-5-20251001".to_string()
@@ -88,33 +89,83 @@ impl Default for AIConfig {
 }
 
 impl AIConfig {
-    /// Resolve API keys from environment variables and dotenv file.
+    /// Resolve API keys. Secrets come exclusively from SOPS: either the
+    /// ANTHROPIC_API_KEY environment variable (as injected by
+    /// `sops exec-env`) or `~/.config/scavenger/secrets.sops.yaml`
+    /// decrypted via the `sops` binary. Plaintext key files are refused —
+    /// a legacy `~/.config/scavenger/.env` is ignored with a loud warning.
     /// Call after deserialization.
     pub fn resolve_env_keys(&mut self) {
+        if !self.anthropic_api_key.is_empty() {
+            log::warn!(
+                "anthropic_api_key is set in plaintext in config.toml — move it to \
+                 ~/.config/scavenger/secrets.sops.yaml (sops-encrypted); plaintext \
+                 config values will stop being honored in a future version"
+            );
+        }
         if self.anthropic_api_key.is_empty() {
             if let Ok(val) = std::env::var("ANTHROPIC_API_KEY") {
                 self.anthropic_api_key = val;
             }
         }
         if self.anthropic_api_key.is_empty() {
-            if let Some(home) = dirs_path() {
-                let dotenv = home.join(".config/scavenger/.env");
-                if let Ok(contents) = fs::read_to_string(&dotenv) {
-                    for line in contents.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with('#') {
-                            continue;
-                        }
-                        if let Some(val) = trimmed.strip_prefix("ANTHROPIC_API_KEY=") {
-                            let val = val.trim();
-                            if !val.is_empty() {
-                                self.anthropic_api_key = val.to_string();
-                                break;
-                            }
-                        }
-                    }
-                }
+            if let Some(val) = sops_extract_key("anthropic_api_key") {
+                self.anthropic_api_key = val;
             }
+        }
+        if let Some(home) = dirs_path() {
+            let legacy = home.join(".config/scavenger/.env");
+            if legacy.exists() {
+                log::warn!(
+                    "plaintext {} is IGNORED — secrets are sops-only now; move the key \
+                     into ~/.config/scavenger/secrets.sops.yaml (`sops edit` it) and \
+                     delete the .env file",
+                    legacy.display()
+                );
+            }
+        }
+    }
+}
+
+/// Decrypt a single key from the sops-encrypted secrets file by shelling
+/// out to the user's `sops` binary, so their real key infrastructure
+/// (age, PGP, KMS, keyservices) is honored. Returns None if the file is
+/// absent, sops is missing, decryption fails, or the value is empty —
+/// callers surface the missing key through AI health, never silently.
+fn sops_extract_key(key: &str) -> Option<String> {
+    // SCAVENGER_SECRETS_FILE overrides the default location — used by
+    // deployments with a different secrets layout, and by tests to avoid
+    // touching the real home directory.
+    let secrets = match std::env::var("SCAVENGER_SECRETS_FILE") {
+        Ok(p) => PathBuf::from(p),
+        Err(_) => dirs_path()?.join(".config/scavenger/secrets.sops.yaml"),
+    };
+    if !secrets.exists() {
+        return None;
+    }
+    let out = std::process::Command::new("sops")
+        .arg("decrypt")
+        .arg("--extract")
+        .arg(format!("[\"{key}\"]"))
+        .arg(&secrets)
+        .output();
+    match out {
+        Ok(out) if out.status.success() => {
+            let val = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if val.is_empty() { None } else { Some(val) }
+        }
+        Ok(out) => {
+            log::warn!(
+                "sops failed to decrypt {} ({}): {}",
+                secrets.display(),
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            None
+        }
+        Err(e) => {
+            log::warn!("sops binary not runnable ({e}) — cannot read {}", secrets.display());
+            None
         }
     }
 }

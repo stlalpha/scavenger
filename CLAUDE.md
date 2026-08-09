@@ -28,7 +28,7 @@ uv run scavenger-ctl start
 uv run scavenger-ctl status|stop|poll <profile>|list-profiles
 
 # Scraping requires Chrome with remote debugging
-google-chrome-stable --remote-debugging-port=9222 --user-data-dir=/tmp/scavenger-chrome &
+google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$HOME/Library/Application Support/scavenger/chrome" &
 ```
 
 ## Architecture
@@ -56,23 +56,29 @@ google-chrome-stable --remote-debugging-port=9222 --user-data-dir=/tmp/scavenger
 - `pytest-asyncio` for async fixture/test support
 - No Playwright in tests — plugin tests mock at the HTTP/page level
 
-## Code Graph Tools
-
-The `code-graph-mcp` plugin is available. Prefer these over multi-step grep/read when exploring:
-
-- **"who calls X?"** → `get_call_graph` (not grep for the function name)
-- **"what breaks if I change X?"** → `impact_analysis` (before editing)
-- **"how is module Y structured?"** → `module_overview` (not reading files one by one)
-- **"find code that does Z"** (concept) → `semantic_code_search` (not grep)
-- **"find all functions returning T"** → `ast_search` with filters
-- **"is this function used?"** → `find_references`
-- **architecture overview** → `project_map`
-
-Still use Grep for: exact strings, constants, regex, non-code files. Still use Read for: a specific file you're about to edit.
-
 ## Key Conventions
 
 - Listing IDs are content hashes of the URL (`dedup.content_hash`)
 - AI evaluation always falls back to passthrough (never drops a listing due to model errors)
 - Plugins must close pages in `finally` blocks — never close the browser context (it's the user's live Chrome)
 - Profile keywords support OR-groups: `["thing"]` matches literally, `[["variant1", "variant2"]]` matches any variant. All top-level keyword entries must match.
+- Secrets are SOPS-only: `ANTHROPIC_API_KEY` comes from the environment (`sops exec-env`) or `~/.config/scavenger/secrets.sops.yaml` (age-encrypted, `sops edit` to change). Plaintext `~/.config/scavenger/.env` is ignored with a warning — never add plaintext key files or plaintext keys in config.toml. `SCAVENGER_SECRETS_FILE` overrides the secrets path (tests use it with a fake `sops` shim).
+
+<!-- code-graph-mcp:begin v2 -->
+## Code Graph (repo-wide AST index)
+
+AST + FTS + vector index of the whole repo — prefer over multi-round Grep/Read for
+structural queries (LSP only sees open files; this sees everything). Fastest path = Bash CLI:
+
+| Intent | Command |
+|--------|---------|
+| Who calls X / what X calls | `code-graph-mcp callgraph X` |
+| Impact before editing a fn | `code-graph-mcp impact X` |
+| Unfamiliar dir / module | `code-graph-mcp overview <dir>` |
+| Symbol source / signature | `code-graph-mcp show X` |
+| Concept search (no exact name) | `code-graph-mcp search "…"` (vector: MCP `semantic_code_search`) |
+| grep + AST context | `code-graph-mcp grep "pat" [paths] [-t lang] [-g glob] [-c]` |
+
+Still use Grep for literal strings/regex in non-code files; still Read files you'll edit.
+Full command + MCP-tool table: `.claude/plugin_code_graph_mcp.md`
+<!-- code-graph-mcp:end -->

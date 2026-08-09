@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, ScavengerError};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ListingStatus {
+    #[default]
     New,
     Seen,
     Saved,
@@ -13,24 +14,13 @@ pub enum ListingStatus {
     Snoozed,
 }
 
-impl Default for ListingStatus {
-    fn default() -> Self {
-        Self::New
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AlertPriority {
     High,
+    #[default]
     Normal,
     Low,
-}
-
-impl Default for AlertPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -60,7 +60,7 @@ fn default_tui_refresh() -> f64 {
 }
 
 /// Expand a leading `~` to the user's home directory.
-fn expand_tilde(p: &str) -> PathBuf {
+pub fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest);

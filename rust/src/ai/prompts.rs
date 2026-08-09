@@ -51,12 +51,12 @@ Evaluate the listing and respond ONLY with valid JSON matching this exact schema
 {{"relevant": bool, "reason": "string", "notable": "string or null", "escalate": bool}}
 
 Interest profile:
-- Keywords (must match): {keywords}
+- Search keywords: {keywords}
 - Negative keywords (any match = not relevant): {negatives}
 - Price range: {price_range}
 
 Rules:
-- relevant: false if any negative keyword appears or the item clearly does not match the profile
+- relevant: judge whether the item ITSELF is what an enthusiast of this profile wants. Keywords are search terms, not the test — unrelated products that merely share a keyword in their name or product line (brands, model lines) are NOT relevant. Also false if any negative keyword appears.
 - reason: 1-2 sentences explaining your decision; shown directly to the user
 - notable: only if there is something specific worth highlighting — rare variant, seller misidentification, significant underpricing, unusual condition. Set to null if nothing notable.
 - escalate: true only if this is an unusually good opportunity the collector should see immediately"#,
@@ -88,12 +88,12 @@ Evaluate EACH listing and respond ONLY with a valid JSON array. Each element mus
 {{"id": "string", "relevant": bool, "reason": "string", "notable": "string or null", "escalate": bool}}
 
 Interest profile:
-- Keywords (must match): {keywords}
+- Search keywords: {keywords}
 - Negative keywords (any match = not relevant): {negatives}
 - Price range: {price_range}
 
 Rules:
-- relevant: false if any negative keyword appears or the item clearly does not match the profile
+- relevant: judge whether the item ITSELF is what an enthusiast of this profile wants. Keywords are search terms, not the test — unrelated products that merely share a keyword in their name or product line (brands, model lines) are NOT relevant. Also false if any negative keyword appears.
 - reason: 1-2 sentences explaining your decision; shown directly to the user
 - notable: only if there is something specific worth highlighting — rare variant, seller misidentification, significant underpricing, unusual condition. Set to null if nothing notable.
 - escalate: true only if this is an unusually good opportunity the collector should see immediately

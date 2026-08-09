@@ -353,7 +353,13 @@ class ScavengerApp(App):
         import subprocess
         import sys
         CDP_PORT = 9222
-        CHROME_DATA = "/tmp/scavenger-chrome"
+        # Durable profile dir (holds marketplace logins) — must match the
+        # Rust binary's chrome::chrome_data_dir(); /tmp is wiped on reboot.
+        if sys.platform == "darwin":
+            CHROME_DATA = str(Path.home() / "Library/Application Support/scavenger/chrome")
+        else:
+            data_home = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))
+            CHROME_DATA = str(Path(data_home) / "scavenger/chrome")
 
         if sys.platform == "darwin":
             chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"

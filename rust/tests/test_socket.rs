@@ -115,6 +115,37 @@ async fn unknown_command_returns_error() {
 }
 
 #[tokio::test]
+async fn oversized_request_without_newline_is_rejected_without_unbounded_buffering() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = start_server(dir.path()).await;
+    let socket_path = dir.path().join("test.sock");
+
+    let stream = UnixStream::connect(&socket_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    // Just past the 64KB cap (small enough to fit in the socket's send
+    // buffer in one write_all, so the server closing early can't race the
+    // client's write into a broken pipe), deliberately never sending a
+    // newline — the read must be capped at the socket layer, not after
+    // buffering it all into memory first.
+    let payload = vec![b'a'; 65536 + 1000]; // just past the server's 64KB cap
+    writer.write_all(&payload).await.unwrap();
+    writer.shutdown().await.unwrap();
+
+    let mut reader = BufReader::new(reader);
+    let mut response = String::new();
+    reader.read_line(&mut response).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+    assert_eq!(resp["status"], "error");
+    assert!(resp["message"]
+        .as_str()
+        .unwrap()
+        .contains("request too large"));
+
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn invalid_json_returns_error() {
     let dir = tempfile::tempdir().unwrap();
     let server = start_server(dir.path()).await;
@@ -160,6 +191,68 @@ async fn reload_command_returns_ok() {
 
     assert_eq!(resp["status"], "ok");
     assert_eq!(resp["data"]["message"], "config reloaded");
+
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn reload_command_surfaces_handler_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket_path = dir.path().join("test.sock");
+    let server = Arc::new(SocketServer::new(socket_path.clone()));
+
+    server
+        .register_reload_handler(Arc::new(|| {
+            Box::pin(async { Err("config reload failed: invalid TOML".to_string()) })
+        }))
+        .await;
+    server.start().await.expect("failed to start socket server");
+
+    let resp = send_command(&socket_path, &serde_json::json!({"command": "reload"})).await;
+
+    assert_eq!(resp["status"], "error");
+    assert_eq!(resp["message"], "config reload failed: invalid TOML");
+
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn status_response_shape_is_stable_across_calls_with_changing_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket_path = dir.path().join("test.sock");
+    let server = Arc::new(SocketServer::new(socket_path.clone()));
+
+    // Simulates a handler backed by state that changes between calls (e.g. a
+    // profile summary refreshed by a reload) — the response envelope must
+    // keep the same shape regardless of what the handler currently reports.
+    let call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = call_count.clone();
+    server
+        .register_status_handler(Arc::new(move || {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let profiles: Vec<&str> = if n == 0 { vec![] } else { vec!["p1", "p2"] };
+            serde_json::json!({
+                "state": "running",
+                "active_polls": [],
+                "profiles": profiles,
+                "bot_blocks": {}
+            })
+        }))
+        .await;
+    server.start().await.expect("failed to start socket server");
+
+    for expected_len in [0usize, 2, 2] {
+        let resp = send_command(&socket_path, &serde_json::json!({"command": "status"})).await;
+        assert_eq!(resp["status"], "ok");
+        assert!(resp["data"]["state"].is_string());
+        assert!(resp["data"]["active_polls"].is_array());
+        assert!(resp["data"]["profiles"].is_array());
+        assert!(resp["data"]["bot_blocks"].is_object());
+        assert_eq!(
+            resp["data"]["profiles"].as_array().unwrap().len(),
+            expected_len
+        );
+    }
 
     server.stop().await;
 }

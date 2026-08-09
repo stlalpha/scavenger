@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::{Parser, Subcommand};
@@ -41,6 +41,17 @@ enum Command {
     Restart,
     /// Start the daemon process (usually called via `start`)
     Daemon,
+    /// Wipe search data (listings, poll state, cached images). Profiles in
+    /// config.toml, sops-encrypted secrets, and Chrome logins are kept.
+    Reset {
+        /// Delete listings + price history only; keep per-source poll
+        /// timestamps so the next start doesn't re-poll everything at once
+        #[arg(long)]
+        listings_only: bool,
+        /// Skip the confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Control the running daemon directly
     Ctl {
         #[command(subcommand)]
@@ -53,10 +64,11 @@ enum CtlAction {
     Status,
     Stop,
     Poll { profile: String },
+    Reload,
     ListProfiles,
 }
 
-fn load_or_die(path: &PathBuf) -> scavenger::config::AppConfig {
+fn load_or_die(path: &Path) -> scavenger::config::AppConfig {
     match load_config(path) {
         Ok(c) => c,
         Err(e) => {
@@ -73,7 +85,7 @@ fn daemon_log_path() -> PathBuf {
         .join("daemon.log")
 }
 
-fn ensure_daemon(config_path: &PathBuf) {
+fn ensure_daemon(config_path: &Path) {
     let config = load_or_die(config_path);
     if ctl::daemon_alive(&config) {
         eprintln!("\x1b[2mDaemon already up\x1b[0m");
@@ -119,7 +131,7 @@ fn ensure_daemon(config_path: &PathBuf) {
     process::exit(1);
 }
 
-fn cmd_start(config_path: &PathBuf) {
+fn cmd_start(config_path: &Path) {
     if let Err(e) = chrome::ensure_chrome() {
         eprintln!("\x1b[31m{e}\x1b[0m");
         process::exit(1);
@@ -129,7 +141,7 @@ fn cmd_start(config_path: &PathBuf) {
     cmd_status(config_path);
 }
 
-fn cmd_stop(config_path: &PathBuf) {
+fn cmd_stop(config_path: &Path) {
     let config = load_or_die(config_path);
     if ctl::daemon_alive(&config) {
         eprintln!("\x1b[1mStopping daemon...\x1b[0m");
@@ -142,7 +154,7 @@ fn cmd_stop(config_path: &PathBuf) {
     chrome::stop_chrome();
 }
 
-fn cmd_status(config_path: &PathBuf) {
+fn cmd_status(config_path: &Path) {
     eprintln!("\x1b[1mscavenger status\x1b[0m");
     eprintln!();
 
@@ -205,7 +217,7 @@ fn main() {
             cmd_start(&cli.config);
             eprintln!();
             let config = load_or_die(&cli.config);
-            match scavenger::tui::App::new(config) {
+            match scavenger::tui::App::new(config, cli.config.clone()) {
                 Ok(mut app) => {
                     if let Err(e) = app.run() {
                         eprintln!("TUI error: {e}");
@@ -245,12 +257,70 @@ fn main() {
                 process::exit(1);
             }
         }
+        Some(Command::Reset { listings_only, yes }) => {
+            let config = load_or_die(&cli.config);
+            if ctl::daemon_alive(&config) {
+                eprintln!("\x1b[31mDaemon is running — stop it first: scavenger stop\x1b[0m");
+                eprintln!("(the TUI must be closed too; both hold the database open)");
+                process::exit(1);
+            }
+            let opts = scavenger::reset::ResetOptions { listings_only };
+            let plan = scavenger::reset::plan(&config, &opts);
+            let listings = plan
+                .listing_count
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".into());
+            if listings_only {
+                eprintln!(
+                    "Will delete {listings} listings (+ price history) from {}.",
+                    plan.db_path.display()
+                );
+                eprintln!("Poll timestamps are kept — no all-at-once re-poll on next start.");
+            } else {
+                eprintln!(
+                    "Will delete {} ({listings} listings, {} KB) and {} cached images in {}.",
+                    plan.db_path.display(),
+                    plan.db_bytes / 1024,
+                    plan.image_count,
+                    plan.image_cache_path.display()
+                );
+                eprintln!("All profiles will re-poll immediately on next daemon start.");
+            }
+            eprintln!("Profiles, sops secrets, and Chrome logins are untouched.");
+            if !yes {
+                eprint!("Proceed? [y/N] ");
+                let mut answer = String::new();
+                if std::io::stdin().read_line(&mut answer).is_err()
+                    || !answer.trim().eq_ignore_ascii_case("y")
+                {
+                    eprintln!("Aborted.");
+                    process::exit(1);
+                }
+            }
+            match scavenger::reset::run(&config, &opts) {
+                Ok(out) => {
+                    if listings_only {
+                        println!("Deleted {} listings; database compacted.", out.listings_deleted);
+                    } else {
+                        println!(
+                            "Removed database ({} listings) and {} cached images. Fresh start on next run.",
+                            out.listings_deleted, out.images_removed
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("\x1b[31mReset failed: {e}\x1b[0m");
+                    process::exit(1);
+                }
+            }
+        }
         Some(Command::Ctl { action }) => {
             let config = load_or_die(&cli.config);
             match action {
                 CtlAction::Status => ctl::cmd_status(&config),
                 CtlAction::Stop => ctl::cmd_stop(&config),
                 CtlAction::Poll { profile } => ctl::cmd_poll(&config, &profile),
+                CtlAction::Reload => ctl::cmd_reload(&config),
                 CtlAction::ListProfiles => ctl::cmd_list_profiles(&config),
             }
         }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use sha2::{Digest, Sha256};
@@ -8,6 +9,16 @@ use sha2::{Digest, Sha256};
 const MEM_CACHE_SIZE: usize = 128;
 const DEFAULT_MAX_AGE_DAYS: u64 = 30;
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Unique temp path for a download destination — pid + a monotonic counter,
+/// so overlapping downloads (or a stale file left by a crashed process)
+/// never race on the same tmp file before rename.
+fn tmp_path_for(dest: &Path) -> PathBuf {
+    let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    dest.with_extension(format!("{}.{}.tmp", std::process::id(), n))
+}
 
 /// Extract file extension from a URL, stripping query params.
 pub fn ext_from_url(url: &str) -> &str {
@@ -71,7 +82,7 @@ impl ThumbnailCache {
         Self::new(Self::default_cache_dir())
     }
 
-    fn cache_path(&self, url: &str) -> PathBuf {
+    pub fn cache_path(&self, url: &str) -> PathBuf {
         let hash = url_hash(url);
         let ext = ext_from_url(url);
         self.cache_dir.join(format!("{hash}{ext}"))
@@ -93,10 +104,8 @@ impl ThumbnailCache {
                     .metadata()
                     .and_then(|m| m.modified())
                     .unwrap_or(SystemTime::UNIX_EPOCH);
-                if modified < cutoff {
-                    if fs::remove_file(&path).is_ok() {
-                        removed += 1;
-                    }
+                if modified < cutoff && fs::remove_file(&path).is_ok() {
+                    removed += 1;
                 }
             }
         }
@@ -148,13 +157,41 @@ impl ThumbnailCache {
     async fn do_download(&self, url: &str, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let response = self.client.get(url).send().await?.error_for_status()?;
         let bytes = response.bytes().await?;
-        let tmp = dest.with_extension("tmp");
+        let tmp = tmp_path_for(dest);
         fs::write(&tmp, &bytes)?;
         fs::rename(&tmp, dest)?;
         Ok(())
     }
 
-    fn insert_mem(&mut self, url: String, path: PathBuf) {
+    /// Synchronous download — blocks the calling thread.
+    /// Used by the TUI which can't easily run async.
+    pub fn download_sync(&mut self, url: &str) -> Option<PathBuf> {
+        if let Some(path) = self.check(url) {
+            return Some(path);
+        }
+        let dest = self.cache_path(url);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).ok();
+        }
+        let response = reqwest::blocking::Client::builder()
+            .user_agent(USER_AGENT)
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .ok()?
+            .get(url)
+            .send()
+            .ok()?
+            .error_for_status()
+            .ok()?;
+        let bytes = response.bytes().ok()?;
+        let tmp = tmp_path_for(&dest);
+        fs::write(&tmp, &bytes).ok()?;
+        fs::rename(&tmp, &dest).ok()?;
+        self.insert_mem(url.to_string(), dest.clone());
+        Some(dest)
+    }
+
+    pub fn insert_mem(&mut self, url: String, path: PathBuf) {
         if !self.resolved.contains_key(&url) {
             self.insertion_order.push(url.clone());
         }
@@ -246,5 +283,16 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut cache = ThumbnailCache::new(dir.path().to_path_buf());
         assert!(cache.check("https://example.com/nope.jpg").is_none());
+    }
+
+    #[test]
+    fn test_tmp_path_for_is_unique() {
+        let dest = PathBuf::from("/tmp/scavenger/images/abc123.jpg");
+        let a = tmp_path_for(&dest);
+        let b = tmp_path_for(&dest);
+        assert_ne!(a, b);
+        assert!(a.to_string_lossy().contains(&std::process::id().to_string()));
+        assert_ne!(a, dest);
+        assert_ne!(b, dest);
     }
 }

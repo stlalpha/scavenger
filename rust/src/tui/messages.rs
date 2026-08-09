@@ -17,4 +17,7 @@ pub enum AppAction {
     SelectProfile(String),
     NavigateUp,
     NavigateDown,
+    CycleSort,
+    NextImage,
+    PrevImage,
 }

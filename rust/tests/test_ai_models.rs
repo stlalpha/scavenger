@@ -37,7 +37,7 @@ fn ai_config_defaults() {
     assert!(!config.enabled);
     assert_eq!(config.litellm_base_url, "http://localhost:11434/v1");
     assert_eq!(config.filter_model, "qwen3.5:9b");
-    assert_eq!(config.filter_timeout_sec, 30.0);
+    assert_eq!(config.filter_timeout_sec, 120.0);
     assert_eq!(config.escalation_model, "claude-haiku-4-5-20251001");
     assert!(!config.escalation_enabled);
     assert_eq!(config.escalation_min_keyword_score, 70.0);

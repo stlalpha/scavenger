@@ -1,25 +1,18 @@
+use std::path::{Path, PathBuf};
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Widget, Wrap};
+use ratatui::widgets::Widget;
 
-use crate::models::{Listing, ListingStatus, Profile};
+use crate::tui::widgets::detail_panel::DetailPanel;
 use crate::tui::widgets::log_panel::{LogPanelState, LogPanelWidget};
+use crate::tui::widgets::profile_sidebar::ProfileSidebar;
+use crate::tui::widgets::results_feed::ResultsFeed;
 use crate::tui::widgets::splitter::{
     HSplitterState, HSplitterWidget, VSplitterState, VSplitterWidget,
 };
 use crate::tui::widgets::status_bar::{StatusBarState, StatusBarWidget};
 use crate::tui::FocusedPanel;
-
-const CLR_BG: Color = Color::Rgb(0x16, 0x16, 0x16);
-const CLR_PANEL_BG: Color = Color::Rgb(0x1a, 0x1a, 0x1a);
-const CLR_ACCENT: Color = Color::Rgb(0xfd, 0x97, 0x1f);
-const CLR_GREEN: Color = Color::Rgb(0xa6, 0xe2, 0x2e);
-const CLR_DATA: Color = Color::Rgb(0x66, 0xd9, 0xef);
-const CLR_DIM: Color = Color::Rgb(0x3a, 0x3a, 0x3a);
-const CLR_MUTED: Color = Color::Rgb(0x75, 0x71, 0x5e);
-const CLR_FG: Color = Color::Rgb(0xf8, 0xf8, 0xf2);
 
 /// Compute the main layout areas.
 ///
@@ -48,6 +41,7 @@ impl MainLayout {
     pub fn compute(
         area: Rect,
         sidebar_width: u16,
+        vsplit2_left_width: u16,
         log_height: u16,
     ) -> Self {
         // Top-level vertical: [content, hsplit(1), log, status_bar(1)]
@@ -67,10 +61,15 @@ impl MainLayout {
         let status_area = vert[3];
 
         // Horizontal split of content: [sidebar, vsplit(1), feed, vsplit(1), detail]
-        // Left side = sidebar_width. Detail gets ~40% of what remains.
+        // `vsplit2_left_width` is the combined width of sidebar+vsplit1+feed,
+        // as tracked by VSplitterState and updated by dragging. 0 is the
+        // "never dragged" sentinel — fall back to the original 60/40 default.
         let left_total = content_area.width.saturating_sub(1); // minus 1 for vsplit2
-        let detail_width = left_total * 40 / 100;
-        let left_width = left_total.saturating_sub(detail_width);
+        let left_width = if vsplit2_left_width == 0 {
+            left_total.saturating_sub(left_total * 40 / 100)
+        } else {
+            vsplit2_left_width.min(left_total)
+        };
 
         let horiz = Layout::default()
             .direction(Direction::Horizontal)
@@ -108,56 +107,136 @@ impl MainLayout {
     }
 }
 
+/// Caches the decoded image and ratatui_image protocol for the detail
+/// panel's hero image, so the draw loop (~10x/sec) only re-decodes on
+/// selection change or resize instead of every frame.
+pub struct HeroImageCache {
+    picker: ratatui_image::picker::Picker,
+    path: Option<PathBuf>,
+    area: Rect,
+    protocol: Option<ratatui_image::protocol::Protocol>,
+    /// The last (path, area) that failed to decode/protocol-encode — skipped
+    /// on subsequent frames instead of retrying a doomed decode ~10x/sec.
+    failed: Option<(PathBuf, Rect)>,
+}
+
+impl HeroImageCache {
+    pub fn new() -> Self {
+        Self {
+            // Halfblocks (unicode ▀▄) — lowest-common-denominator fallback.
+            // detect_terminal() upgrades this to the terminal's real
+            // graphics protocol once the terminal is in raw mode.
+            picker: ratatui_image::picker::Picker::from_fontsize((8, 12)),
+            path: None,
+            area: Rect::default(),
+            protocol: None,
+            failed: None,
+        }
+    }
+
+    /// Query the terminal for its graphics protocol (Kitty/iTerm2/Sixel)
+    /// and real cell size, so images render at full resolution instead of
+    /// halfblock mosaics. Must run while the terminal is in raw mode and
+    /// before the first draw; keeps the halfblock fallback on failure.
+    pub fn detect_terminal(&mut self) {
+        if let Ok(picker) = ratatui_image::picker::Picker::from_query_stdio() {
+            self.picker = picker;
+            // Invalidate anything encoded with the fallback picker.
+            self.protocol = None;
+            self.path = None;
+            self.failed = None;
+        }
+    }
+
+    fn ensure(&mut self, img_path: &Path, area: Rect) {
+        if self.protocol.is_some() && self.path.as_deref() == Some(img_path) && self.area == area
+        {
+            return;
+        }
+        if self
+            .failed
+            .as_ref()
+            .is_some_and(|(p, a)| p.as_path() == img_path && *a == area)
+        {
+            return;
+        }
+        self.path = None;
+        self.protocol = None;
+
+        let Ok(dyn_img) = image::ImageReader::open(img_path)
+            .and_then(|r| r.with_guessed_format())
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.decode().map_err(|e| e.to_string()))
+        else {
+            self.failed = Some((img_path.to_path_buf(), area));
+            return;
+        };
+
+        match self
+            .picker
+            .new_protocol(dyn_img, area, ratatui_image::Resize::Fit(None))
+        {
+            Ok(proto) => {
+                self.protocol = Some(proto);
+                self.path = Some(img_path.to_path_buf());
+                self.area = area;
+                self.failed = None;
+            }
+            Err(_) => {
+                self.failed = Some((img_path.to_path_buf(), area));
+            }
+        }
+    }
+}
+
+impl Default for HeroImageCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Render the full main screen into the buffer.
+#[allow(clippy::too_many_arguments)]
 pub fn render_main_screen(
     area: Rect,
     buf: &mut Buffer,
-    profiles: &[Profile],
-    active_profile: Option<&str>,
-    profile_stats: &std::collections::HashMap<String, usize>,
-    listings: &[Listing],
-    selected_listing: Option<usize>,
+    sidebar: &mut ProfileSidebar,
+    feed: &mut ResultsFeed,
+    detail: &DetailPanel,
     focused: FocusedPanel,
     vsplit1: &VSplitterState,
     vsplit2: &VSplitterState,
     hsplit: &HSplitterState,
     log_state: &LogPanelState,
     status_state: &StatusBarState,
+    image_path: Option<&Path>,
+    hero_cache: &mut HeroImageCache,
 ) {
-    let layout = MainLayout::compute(area, vsplit1.left_width, hsplit.bottom_height);
-
-    // -- Profile sidebar --
-    render_profile_sidebar(
-        layout.sidebar,
-        buf,
-        profiles,
-        active_profile,
-        profile_stats,
-        focused == FocusedPanel::Profiles,
+    let layout = MainLayout::compute(
+        area,
+        vsplit1.left_width,
+        vsplit2.left_width,
+        hsplit.bottom_height,
     );
+
+    sidebar.render(layout.sidebar, buf, focused == FocusedPanel::Profiles);
 
     // -- Splitters --
     VSplitterWidget::new(vsplit1).render(layout.vsplit1, buf);
     VSplitterWidget::new(vsplit2).render(layout.vsplit2, buf);
     HSplitterWidget::new(hsplit).render(layout.hsplit, buf);
 
-    // -- Results feed --
-    render_results_feed(
-        layout.feed,
-        buf,
-        listings,
-        selected_listing,
-        focused == FocusedPanel::Feed,
-    );
+    feed.render(layout.feed, buf, focused == FocusedPanel::Feed);
 
-    // -- Detail panel --
-    let detail_listing = selected_listing.and_then(|i| listings.get(i));
-    render_detail_panel(
-        layout.detail,
-        buf,
-        detail_listing,
-        focused == FocusedPanel::Detail,
-    );
+    // Detail panel draws its own text/placeholder and hands back the Rect
+    // reserved for the hero image, if any — actual image compositing needs
+    // a live ratatui_image Picker, which stays here rather than in the
+    // widget layer.
+    if let Some(image_area) = detail.render(layout.detail, buf, focused == FocusedPanel::Detail) {
+        if let Some(img_path) = image_path {
+            render_hero_image(hero_cache, img_path, image_area, buf);
+        }
+    }
 
     // -- Log --
     LogPanelWidget::new(log_state, focused == FocusedPanel::Log).render(layout.log, buf);
@@ -166,205 +245,41 @@ pub fn render_main_screen(
     StatusBarWidget::new(status_state).render(layout.status_bar, buf);
 }
 
-fn render_profile_sidebar(
-    area: Rect,
-    buf: &mut Buffer,
-    profiles: &[Profile],
-    active_profile: Option<&str>,
-    stats: &std::collections::HashMap<String, usize>,
-    focused: bool,
-) {
-    let border_color = if focused { CLR_ACCENT } else { Color::Rgb(0x22, 0x22, 0x22) };
-    let block = Block::default()
-        .title(Span::styled(
-            " PROFILES",
-            Style::default().fg(CLR_GREEN).add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(CLR_BG));
-
-    let inner = block.inner(area);
-    block.render(area, buf);
-
-    let items: Vec<ListItem> = profiles
-        .iter()
-        .map(|p| {
-            let is_active = active_profile == Some(p.id.as_str());
-            let count = stats.get(&p.id).copied().unwrap_or(0);
-            let style = if is_active {
-                Style::default().fg(CLR_GREEN).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(CLR_MUTED)
-            };
-            let prefix = if is_active { "▸ " } else { "  " };
-            let count_str = if count > 0 {
-                format!(" ({count})")
-            } else {
-                String::new()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{prefix}{}", p.name), style),
-                Span::styled(count_str, Style::default().fg(CLR_DATA)),
-            ]))
-        })
-        .collect();
-
-    let list = List::new(items);
-    list.render(inner, buf);
+fn render_hero_image(cache: &mut HeroImageCache, img_path: &Path, area: Rect, buf: &mut Buffer) {
+    cache.ensure(img_path, area);
+    if let Some(proto) = &cache.protocol {
+        let img = ratatui_image::Image::new(proto);
+        Widget::render(img, area, buf);
+    }
 }
 
-fn render_results_feed(
-    area: Rect,
-    buf: &mut Buffer,
-    listings: &[Listing],
-    selected: Option<usize>,
-    focused: bool,
-) {
-    let border_color = if focused { CLR_ACCENT } else { Color::Rgb(0x22, 0x22, 0x22) };
-    let block = Block::default()
-        .title(Span::styled(
-            " LISTINGS",
-            Style::default().fg(CLR_DATA).add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::NONE)
-        .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(CLR_PANEL_BG));
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let inner = block.inner(area);
-    block.render(area, buf);
+    #[test]
+    fn hero_image_cache_records_and_skips_failed_decode() {
+        let mut cache = HeroImageCache::new();
+        let dir = tempfile::TempDir::new().unwrap();
+        let bad_path = dir.path().join("not-an-image.jpg");
+        std::fs::write(&bad_path, b"not an image").unwrap();
 
-    if listings.is_empty() {
-        let msg = Paragraph::new("No listings yet")
-            .style(Style::default().fg(CLR_DIM));
-        msg.render(inner, buf);
-        return;
+        let area = Rect::new(0, 0, 20, 10);
+        cache.ensure(&bad_path, area);
+        assert!(cache.protocol.is_none());
+        assert_eq!(cache.failed, Some((bad_path.clone(), area)));
+
+        // Same (path, area) short-circuits — removing the file proves the
+        // retry path isn't taken (a real retry would still just fail, but
+        // this confirms `ensure` doesn't touch the filesystem again).
+        std::fs::remove_file(&bad_path).unwrap();
+        cache.ensure(&bad_path, area);
+        assert!(cache.protocol.is_none());
+        assert_eq!(cache.failed, Some((bad_path.clone(), area)));
+
+        // A different area invalidates the failed-cache entry and retries.
+        let other_area = Rect::new(0, 0, 20, 20);
+        cache.ensure(&bad_path, other_area);
+        assert_eq!(cache.failed, Some((bad_path, other_area)));
     }
-
-    let items: Vec<ListItem> = listings
-        .iter()
-        .enumerate()
-        .map(|(i, l)| {
-            let is_selected = selected == Some(i);
-            let status_indicator = match l.status {
-                ListingStatus::New => Span::styled("● ", Style::default().fg(CLR_GREEN)),
-                ListingStatus::Saved => Span::styled("★ ", Style::default().fg(CLR_ACCENT)),
-                ListingStatus::Seen => Span::styled("  ", Style::default().fg(CLR_DIM)),
-                ListingStatus::Dismissed => Span::styled("✕ ", Style::default().fg(CLR_DIM)),
-                ListingStatus::Snoozed => Span::styled("◷ ", Style::default().fg(CLR_MUTED)),
-            };
-            let title_style = if is_selected {
-                Style::default().fg(CLR_FG).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(CLR_MUTED)
-            };
-            let price_str = l
-                .price
-                .map(|p| format!(" ${p:.0}"))
-                .unwrap_or_default();
-            ListItem::new(Line::from(vec![
-                status_indicator,
-                Span::styled(&l.title, title_style),
-                Span::styled(price_str, Style::default().fg(CLR_GREEN)),
-            ]))
-        })
-        .collect();
-
-    let list = List::new(items);
-    list.render(inner, buf);
-}
-
-fn render_detail_panel(
-    area: Rect,
-    buf: &mut Buffer,
-    listing: Option<&Listing>,
-    focused: bool,
-) {
-    let border_color = if focused { CLR_ACCENT } else { Color::Rgb(0x22, 0x22, 0x22) };
-    let block = Block::default()
-        .title(Span::styled(
-            " DETAIL",
-            Style::default().fg(CLR_ACCENT).add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::NONE)
-        .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(CLR_PANEL_BG));
-
-    let inner = block.inner(area);
-    block.render(area, buf);
-
-    let Some(listing) = listing else {
-        let msg = Paragraph::new("Select a listing")
-            .style(Style::default().fg(CLR_DIM));
-        msg.render(inner, buf);
-        return;
-    };
-
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(Span::styled(
-        &listing.title,
-        Style::default().fg(CLR_FG).add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-
-    if let Some(price) = listing.price {
-        lines.push(Line::from(vec![
-            Span::styled("Price: ", Style::default().fg(CLR_MUTED)),
-            Span::styled(
-                format!("${price:.2}"),
-                Style::default().fg(CLR_GREEN).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-    }
-
-    if let Some(ref loc) = listing.location {
-        lines.push(Line::from(vec![
-            Span::styled("Location: ", Style::default().fg(CLR_MUTED)),
-            Span::styled(loc.as_str(), Style::default().fg(CLR_FG)),
-        ]));
-    }
-
-    if let Some(ref cond) = listing.condition {
-        lines.push(Line::from(vec![
-            Span::styled("Condition: ", Style::default().fg(CLR_MUTED)),
-            Span::styled(cond.as_str(), Style::default().fg(CLR_FG)),
-        ]));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("Source: ", Style::default().fg(CLR_MUTED)),
-        Span::styled(&listing.source_id, Style::default().fg(CLR_DATA)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Score: ", Style::default().fg(CLR_MUTED)),
-        Span::styled(
-            format!("{:.0}", listing.relevance_score),
-            Style::default().fg(CLR_ACCENT),
-        ),
-    ]));
-
-    if !listing.description.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            &listing.description,
-            Style::default().fg(CLR_MUTED),
-        )));
-    }
-
-    // Keybind hints at bottom
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("o", Style::default().fg(CLR_ACCENT)),
-        Span::styled("pen  ", Style::default().fg(CLR_DIM)),
-        Span::styled("s", Style::default().fg(CLR_ACCENT)),
-        Span::styled("ave  ", Style::default().fg(CLR_DIM)),
-        Span::styled("d", Style::default().fg(CLR_ACCENT)),
-        Span::styled("ismiss  ", Style::default().fg(CLR_DIM)),
-        Span::styled("n", Style::default().fg(CLR_ACCENT)),
-        Span::styled("snooze", Style::default().fg(CLR_DIM)),
-    ]));
-
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-    paragraph.render(inner, buf);
 }

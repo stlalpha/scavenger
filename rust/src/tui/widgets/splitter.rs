@@ -3,9 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
 
-const CLR_NORMAL: Color = Color::Rgb(0x22, 0x22, 0x22);
-const CLR_HOVER: Color = Color::Rgb(0x55, 0x55, 0x55);
-const CLR_DRAG: Color = Color::Rgb(0xfd, 0x97, 0x1f);
+use crate::tui::colors;
 
 /// Vertical splitter state — drag left/right to resize sibling panes.
 ///
@@ -77,11 +75,11 @@ impl VSplitterState {
 
     fn color(&self) -> Color {
         if self.dragging {
-            CLR_DRAG
+            colors::ORANGE
         } else if self.hovering {
-            CLR_HOVER
+            colors::SPLITTER_HOVER
         } else {
-            CLR_NORMAL
+            colors::SPLITTER_IDLE
         }
     }
 }
@@ -172,11 +170,11 @@ impl HSplitterState {
 
     fn color(&self) -> Color {
         if self.dragging {
-            CLR_DRAG
+            colors::ORANGE
         } else if self.hovering {
-            CLR_HOVER
+            colors::SPLITTER_HOVER
         } else {
-            CLR_NORMAL
+            colors::SPLITTER_IDLE
         }
     }
 }

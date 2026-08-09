@@ -83,6 +83,8 @@ fn test_load_missing_file() {
 
 #[test]
 fn test_load_ai_config() {
+    // Hermetic: never consult the developer's real sops secrets file.
+    std::env::set_var("SCAVENGER_SECRETS_FILE", "/nonexistent/secrets.sops.yaml");
     let ai = config::load_ai_config(&fixture("valid_config.toml")).unwrap();
     assert!(ai.enabled);
     assert_eq!(ai.filter_model, "llama3:8b");
@@ -93,6 +95,8 @@ fn test_load_ai_config() {
 
 #[test]
 fn test_load_ai_config_missing_section() {
+    // Hermetic: never consult the developer's real sops secrets file.
+    std::env::set_var("SCAVENGER_SECRETS_FILE", "/nonexistent/secrets.sops.yaml");
     let ai = config::load_ai_config(&fixture("no_ai_config.toml")).unwrap();
     assert!(!ai.enabled);
     assert_eq!(ai.filter_model, "qwen3.5:9b");
@@ -100,6 +104,8 @@ fn test_load_ai_config_missing_section() {
 
 #[test]
 fn test_load_ai_config_missing_file() {
+    // Hermetic: never consult the developer's real sops secrets file.
+    std::env::set_var("SCAVENGER_SECRETS_FILE", "/nonexistent/secrets.sops.yaml");
     let ai = config::load_ai_config(&fixture("does_not_exist.toml")).unwrap();
     assert!(!ai.enabled);
 }

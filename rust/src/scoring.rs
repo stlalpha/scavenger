@@ -65,8 +65,8 @@ pub fn score_listing(
         (None, _, _) => 20.0,
         (_, None, None) => 20.0,
         (Some(p), min, max) => {
-            let above_min = min.map_or(true, |m| p >= m);
-            let below_max = max.map_or(true, |m| p <= m);
+            let above_min = min.is_none_or(|m| p >= m);
+            let below_max = max.is_none_or(|m| p <= m);
             if above_min && below_max {
                 20.0
             } else {

@@ -88,6 +88,11 @@ fn age_str(dt: &DateTime<Utc>) -> String {
     }
 }
 
+/// Fixed render height of one listing card — the title line plus the
+/// price/source/age line. Hit-testing and scroll math both depend on this
+/// staying in sync with `render_card`'s output.
+pub const CARD_HEIGHT: u16 = 2;
+
 fn has_notable(listing: &Listing) -> bool {
     listing
         .ai_evaluation
@@ -160,6 +165,12 @@ pub struct ResultsFeed {
     pub state: ListState,
 }
 
+impl Default for ResultsFeed {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResultsFeed {
     pub fn new() -> Self {
         Self {
@@ -206,15 +217,47 @@ impl ResultsFeed {
         true
     }
 
+    /// Re-sort and restore the selection by listing id rather than raw row
+    /// index — otherwise a poll landing mid-read (e.g. Newest sort
+    /// prepending a new row) silently swaps the listing under the cursor.
     fn resort(&mut self) {
+        let selected_id = self.focused_listing().map(|l| l.id.clone());
+
         self.sorted_listings = self.raw_listings.clone();
         sort_listings(&mut self.sorted_listings, self.sort_key);
-        // Clamp cursor
-        let max = self.sorted_listings.len().saturating_sub(1);
+
+        if self.sorted_listings.is_empty() {
+            self.state.select(None);
+            return;
+        }
+
+        if let Some(id) = selected_id {
+            if let Some(idx) = self.sorted_listings.iter().position(|l| l.id == id) {
+                self.state.select(Some(idx));
+                return;
+            }
+        }
+
+        // Previously-selected listing is gone (dismissed elsewhere) or
+        // nothing was selected — clamp to bounds instead of losing position.
+        let max = self.sorted_listings.len() - 1;
         match self.state.selected() {
-            Some(i) if i > max => self.state.select(Some(max)),
-            None if !self.sorted_listings.is_empty() => self.state.select(Some(0)),
-            _ => {}
+            Some(i) => self.state.select(Some(i.min(max))),
+            None => self.state.select(Some(0)),
+        }
+    }
+
+    /// Map a mouse row (0-based, relative to the list's inner content area)
+    /// to a listing index — honors the current scroll offset and the fixed
+    /// `CARD_HEIGHT`, unlike a naive 1:1 row mapping which silently selects
+    /// the wrong listing on any card past the first or any scrolled view.
+    /// Returns `None` if the row falls past the last rendered card.
+    pub fn hit_test(&self, row: u16) -> Option<usize> {
+        let idx = self.state.offset() + (row / CARD_HEIGHT) as usize;
+        if idx < self.sorted_listings.len() {
+            Some(idx)
+        } else {
+            None
         }
     }
 
@@ -246,7 +289,13 @@ impl ResultsFeed {
         self.state.select(Some(i));
     }
 
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, focused: bool) {
+        let border_color = if focused {
+            colors::ORANGE
+        } else {
+            colors::INDICATOR_ACTIVE
+        };
+
         let new_count = self
             .sorted_listings
             .iter()
@@ -288,7 +337,7 @@ impl ResultsFeed {
             let list = List::new(items).block(
                 Block::bordered()
                     .title(title_line)
-                    .border_style(Style::default().fg(colors::INDICATOR_ACTIVE))
+                    .border_style(Style::default().fg(border_color))
                     .style(Style::default().bg(colors::BG_FEED)),
             );
             Widget::render(list, area, buf);
@@ -301,15 +350,243 @@ impl ResultsFeed {
             .map(|l| ListItem::new(render_card(l)))
             .collect();
 
+        // Same selection wash convention as the sidebar: brighter when this
+        // panel actually has focus, dimmer otherwise.
+        let highlight_bg = if focused {
+            colors::BG_SELECTED
+        } else {
+            colors::BG_HIGHLIGHT
+        };
         let list = List::new(items)
             .block(
                 Block::bordered()
                     .title(title_line)
-                    .border_style(Style::default().fg(colors::INDICATOR_ACTIVE))
+                    .border_style(Style::default().fg(border_color))
                     .style(Style::default().bg(colors::BG_FEED)),
             )
-            .highlight_style(Style::default().bg(colors::BG_HIGHLIGHT));
+            .highlight_style(Style::default().bg(highlight_bg));
 
         StatefulWidget::render(list, area, buf, &mut self.state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ListingStatus;
+
+    fn listing(id: &str, price: Option<f64>, score: f64, source: &str, secs_ago: i64) -> Listing {
+        Listing {
+            id: id.to_string(),
+            profile_id: "p1".to_string(),
+            source_id: source.to_string(),
+            title: id.to_string(),
+            description: String::new(),
+            price,
+            currency: "USD".to_string(),
+            condition: None,
+            url: format!("https://example.com/{id}"),
+            image_urls: Vec::new(),
+            location: None,
+            first_seen: Utc::now() - chrono::Duration::seconds(secs_ago),
+            last_seen: Utc::now(),
+            relevance_score: score,
+            status: ListingStatus::New,
+            ai_evaluation: None,
+        }
+    }
+
+    #[test]
+    fn sort_key_cycles_through_all_six() {
+        let mut key = SortKey::Newest;
+        let mut seen = vec![key];
+        for _ in 0..5 {
+            key = key.next();
+            seen.push(key);
+        }
+        assert_eq!(seen, SortKey::ALL.to_vec());
+        assert_eq!(key.next(), SortKey::Newest);
+    }
+
+    #[test]
+    fn sort_by_price_low_puts_none_last() {
+        let mut listings = vec![
+            listing("a", None, 0.0, "ebay", 0),
+            listing("b", Some(50.0), 0.0, "ebay", 0),
+            listing("c", Some(10.0), 0.0, "ebay", 0),
+        ];
+        sort_listings(&mut listings, SortKey::PriceLow);
+        assert_eq!(
+            listings.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(),
+            vec!["c", "b", "a"]
+        );
+    }
+
+    #[test]
+    fn sort_by_price_high_puts_none_last() {
+        let mut listings = vec![
+            listing("a", None, 0.0, "ebay", 0),
+            listing("b", Some(50.0), 0.0, "ebay", 0),
+            listing("c", Some(10.0), 0.0, "ebay", 0),
+        ];
+        sort_listings(&mut listings, SortKey::PriceHigh);
+        assert_eq!(
+            listings.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(),
+            vec!["b", "c", "a"]
+        );
+    }
+
+    #[test]
+    fn sort_by_relevance_descending() {
+        let mut listings = vec![
+            listing("a", None, 10.0, "ebay", 0),
+            listing("b", None, 90.0, "ebay", 0),
+            listing("c", None, 50.0, "ebay", 0),
+        ];
+        sort_listings(&mut listings, SortKey::Relevance);
+        assert_eq!(
+            listings.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(),
+            vec!["b", "c", "a"]
+        );
+    }
+
+    #[test]
+    fn age_str_buckets_by_magnitude() {
+        assert_eq!(age_str(&(Utc::now() - chrono::Duration::seconds(10))), "now");
+        assert_eq!(age_str(&(Utc::now() - chrono::Duration::minutes(5))), "5m");
+        assert_eq!(age_str(&(Utc::now() - chrono::Duration::hours(3))), "3h");
+        assert_eq!(age_str(&(Utc::now() - chrono::Duration::days(2))), "2d");
+    }
+
+    #[test]
+    fn has_notable_reads_ai_evaluation_json() {
+        let mut l = listing("a", None, 0.0, "ebay", 0);
+        assert!(!has_notable(&l));
+        l.ai_evaluation = Some(r#"{"notable": "", "reason": "meh"}"#.to_string());
+        assert!(!has_notable(&l));
+        l.ai_evaluation = Some(r#"{"notable": "rare find", "reason": "meh"}"#.to_string());
+        assert!(has_notable(&l));
+    }
+
+    #[test]
+    fn update_listings_fingerprint_dedupes_unchanged_sets() {
+        let mut feed = ResultsFeed::new();
+        let listings = vec![listing("a", Some(10.0), 0.0, "ebay", 0)];
+        assert!(feed.update_listings(listings.clone(), true));
+        assert!(!feed.update_listings(listings, true));
+    }
+
+    #[test]
+    fn hit_test_maps_two_row_cards_at_zero_offset() {
+        let mut feed = ResultsFeed::new();
+        feed.update_listings(
+            vec![
+                listing("a", None, 0.0, "ebay", 0),
+                listing("b", None, 0.0, "ebay", 0),
+                listing("c", None, 0.0, "ebay", 0),
+            ],
+            true,
+        );
+        assert_eq!(feed.hit_test(0), Some(0));
+        assert_eq!(feed.hit_test(1), Some(0));
+        assert_eq!(feed.hit_test(2), Some(1));
+        assert_eq!(feed.hit_test(3), Some(1));
+        assert_eq!(feed.hit_test(4), Some(2));
+        assert_eq!(feed.hit_test(5), Some(2));
+        assert_eq!(feed.hit_test(6), None); // past the last card
+    }
+
+    #[test]
+    fn hit_test_accounts_for_scroll_offset() {
+        let mut feed = ResultsFeed::new();
+        feed.update_listings(
+            (0..10)
+                .map(|i| listing(&i.to_string(), None, 0.0, "ebay", 0))
+                .collect(),
+            true,
+        );
+        *feed.state.offset_mut() = 3; // as if scrolled so item 3 renders first
+        assert_eq!(feed.hit_test(0), Some(3));
+        assert_eq!(feed.hit_test(1), Some(3));
+        assert_eq!(feed.hit_test(2), Some(4));
+        assert_eq!(feed.hit_test(12), Some(9));
+        assert_eq!(feed.hit_test(14), None);
+    }
+
+    #[test]
+    fn hit_test_none_on_empty_feed() {
+        let feed = ResultsFeed::new();
+        assert_eq!(feed.hit_test(0), None);
+    }
+
+    #[test]
+    fn resort_restores_selection_by_id_when_newest_prepends_a_row() {
+        let mut feed = ResultsFeed::new();
+        feed.update_listings(
+            vec![
+                listing("old", None, 0.0, "ebay", 100),
+                listing("mid", None, 0.0, "ebay", 50),
+            ],
+            true,
+        );
+        // Select "mid" (index 1 under Newest: old is older, so "mid" sorts
+        // first — pick "old" as the one under the cursor instead).
+        let idx = feed
+            .sorted_listings
+            .iter()
+            .position(|l| l.id == "old")
+            .unwrap();
+        feed.state.select(Some(idx));
+        assert_eq!(feed.focused_listing().unwrap().id, "old");
+
+        // A poll prepends a brand-new row ahead of both under Newest sort.
+        feed.update_listings(
+            vec![
+                listing("new", None, 0.0, "ebay", 0),
+                listing("old", None, 0.0, "ebay", 100),
+                listing("mid", None, 0.0, "ebay", 50),
+            ],
+            true,
+        );
+
+        // Selection must still track listing "old", not row index 0.
+        assert_eq!(feed.focused_listing().unwrap().id, "old");
+    }
+
+    #[test]
+    fn resort_clamps_when_selected_listing_disappears() {
+        let mut feed = ResultsFeed::new();
+        feed.update_listings(
+            vec![
+                listing("a", None, 0.0, "ebay", 0),
+                listing("b", None, 0.0, "ebay", 0),
+                listing("c", None, 0.0, "ebay", 0),
+            ],
+            true,
+        );
+        // Select "c" by id rather than a hardcoded index — Newest sort
+        // ties on near-identical timestamps aren't deterministic enough
+        // to assume a fixed position here.
+        let idx = feed.sorted_listings.iter().position(|l| l.id == "c").unwrap();
+        feed.state.select(Some(idx));
+
+        feed.update_listings(
+            vec![listing("a", None, 0.0, "ebay", 0), listing("b", None, 0.0, "ebay", 0)],
+            true,
+        );
+
+        // "c" is gone — falls back to a clamped index instead of losing
+        // the selection or silently resetting to the top.
+        let max = feed.sorted_listings.len() - 1;
+        assert_eq!(feed.state.selected(), Some(idx.min(max)));
+    }
+
+    #[test]
+    fn update_listings_fingerprint_changes_on_status() {
+        let mut feed = ResultsFeed::new();
+        let mut l = listing("a", Some(10.0), 0.0, "ebay", 0);
+        assert!(feed.update_listings(vec![l.clone()], true));
+        l.status = ListingStatus::Seen;
+        assert!(feed.update_listings(vec![l], true));
     }
 }

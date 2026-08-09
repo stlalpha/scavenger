@@ -4,10 +4,9 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::Result;
 use serde_json::{json, Value};
 
-use crate::config::{load_ai_config, load_config, AppConfig};
+use crate::config::AppConfig;
 
 /// Send a JSON command to the daemon over its Unix socket and return the response.
 fn send(socket_path: &Path, command: Value) -> Value {
@@ -101,27 +100,32 @@ pub fn cmd_poll(config: &AppConfig, profile_name: &str) {
 
 pub fn cmd_stop(config: &AppConfig) {
     let resp = send(&config.socket_path(), json!({"command": "shutdown"}));
+    if resp["status"] != "ok" {
+        eprintln!("error: {}", resp["message"].as_str().unwrap_or("unknown"));
+        return;
+    }
+    // The daemon acks the shutdown command, then drains in-flight polls for
+    // up to ~10s with the socket still answering. Returning before it has
+    // actually exited makes `stop && reset` (or a quick restart) race the
+    // drain and fail confusingly — wait it out.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while daemon_alive(config) {
+        if std::time::Instant::now() >= deadline {
+            eprintln!("warning: daemon still draining after 15s — try again shortly");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    println!("ok");
+}
+
+pub fn cmd_reload(config: &AppConfig) {
+    let resp = send(&config.socket_path(), json!({"command": "reload"}));
     if resp["status"] == "ok" {
         println!("ok");
     } else {
         eprintln!("error: {}", resp["message"].as_str().unwrap_or("unknown"));
     }
-}
-
-pub fn cmd_start(config_path: &Path) -> Result<()> {
-    let _config = load_config(config_path)?;
-    let ai_config = load_ai_config(config_path)?;
-
-    if ai_config.enabled {
-        println!(
-            "Starting SCAVENGER daemon (AI: {})...",
-            ai_config.filter_model
-        );
-    } else {
-        println!("Starting SCAVENGER daemon...");
-    }
-
-    todo!("Daemon implementation not yet available")
 }
 
 #[cfg(test)]
@@ -137,6 +141,20 @@ mod tests {
             msg.contains("Daemon not running") || msg.contains("Socket error"),
             "unexpected message: {msg}"
         );
+    }
+
+    #[test]
+    fn cmd_reload_sends_reload_command() {
+        // No daemon listening — just verify cmd_reload doesn't panic and
+        // reports the same not-running condition as the other commands.
+        let config = AppConfig {
+            global_config: crate::config::GlobalConfig {
+                socket_path: "/tmp/scavenger-test-reload-nonexistent.sock".into(),
+                ..Default::default()
+            },
+            profiles: vec![],
+        };
+        cmd_reload(&config);
     }
 
     #[test]

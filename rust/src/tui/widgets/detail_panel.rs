@@ -127,17 +127,18 @@ fn render_listing_text(listing: &Listing, img_index: usize, img_total: usize) ->
 
     lines.push(Line::raw(""));
 
-    // Image nav + keybind hints
+    // Image nav + keybind hints. Labeled with the actual keys (',' / '.')
+    // rather than plain chevrons — arrow keys switch panel focus instead.
     let mut hint_spans: Vec<Span> = Vec::new();
     if img_total > 1 {
-        hint_spans.push(Span::styled("<", Style::default().fg(colors::TEXT_DIMMER)));
+        hint_spans.push(Span::styled(",", Style::default().fg(colors::ORANGE)));
         hint_spans.push(Span::raw(" "));
         hint_spans.push(Span::styled(
             format!("{}/{}", img_index + 1, img_total),
             Style::default().fg(colors::TEXT_PRIMARY),
         ));
         hint_spans.push(Span::raw(" "));
-        hint_spans.push(Span::styled(">", Style::default().fg(colors::TEXT_DIMMER)));
+        hint_spans.push(Span::styled(".", Style::default().fg(colors::ORANGE)));
         hint_spans.push(Span::raw("  "));
     } else if img_total == 1 {
         hint_spans.push(Span::styled("1/1", Style::default().fg(colors::TEXT_DIMMEST)));
@@ -173,6 +174,12 @@ pub struct DetailPanel {
     pub hero_image_path: Option<PathBuf>,
 }
 
+impl Default for DetailPanel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DetailPanel {
     pub fn new() -> Self {
         Self {
@@ -195,10 +202,10 @@ impl DetailPanel {
             .map(|v| {
                 v.get("reason")
                     .and_then(|r| r.as_str())
-                    .map_or(false, |s| !s.is_empty())
+                    .is_some_and(|s| !s.is_empty())
                     || v.get("notable")
                         .and_then(|n| n.as_str())
-                        .map_or(false, |s| !s.is_empty())
+                        .is_some_and(|s| !s.is_empty())
             })
             .unwrap_or(false)
     }
@@ -221,13 +228,22 @@ impl DetailPanel {
         true
     }
 
-    /// Set full gallery images (from detail page scrape).
+    /// Set full gallery images (from detail page scrape), replacing the
+    /// feed-thumbnail placeholder set by `show_listing`. Deliberately does
+    /// NOT touch `hero_image_path` — the gallery's URLs are a different
+    /// size variant than the feed thumbnail, so swapping eagerly here would
+    /// blank the hero every time while the new size downloads. The caller
+    /// keeps showing the current image until the replacement actually
+    /// resolves (cache hit or a completed download).
     pub fn set_gallery(&mut self, images: Vec<String>) {
-        if !images.is_empty() {
-            self.images = images;
-            self.img_idx = 0;
-            self.hero_image_path = None;
+        if images.is_empty() {
+            return;
         }
+        let current_url = self.images.get(self.img_idx).cloned();
+        self.images = images;
+        self.img_idx = current_url
+            .and_then(|u| self.images.iter().position(|i| *i == u))
+            .unwrap_or(0);
     }
 
     pub fn current_image_url(&self) -> Option<&str> {
@@ -279,7 +295,17 @@ impl DetailPanel {
         }
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer) {
+    /// Renders the panel and, if a hero image is loaded, returns the Rect
+    /// reserved for it — painting the image itself (via ratatui_image) is
+    /// the caller's job, since that needs a live `Picker` the widget layer
+    /// doesn't own.
+    pub fn render(&self, area: Rect, buf: &mut Buffer, focused: bool) -> Option<Rect> {
+        let border_color = if focused {
+            colors::ORANGE
+        } else {
+            colors::INDICATOR_ACTIVE
+        };
+
         let src_label = self
             .listing
             .as_ref()
@@ -305,14 +331,14 @@ impl DetailPanel {
 
         let block = Block::bordered()
             .title(Line::from(title_spans))
-            .border_style(Style::default().fg(colors::INDICATOR_ACTIVE))
+            .border_style(Style::default().fg(border_color))
             .style(Style::default().bg(colors::BG_DETAIL));
 
         let inner = block.inner(area);
         Widget::render(block, area, buf);
 
         if inner.width == 0 || inner.height == 0 {
-            return;
+            return None;
         }
 
         match &self.listing {
@@ -324,12 +350,21 @@ impl DetailPanel {
                         .add_modifier(Modifier::ITALIC),
                 ));
                 Widget::render(placeholder, inner, buf);
+                None
             }
             Some(listing) => {
-                // Split inner area: hero image area (if we have an image path) + text
-                let (text_area, _image_area) = if self.hero_image_path.is_some() {
+                // Split inner area: hero image area (if we have an image path) + text.
+                // The band is capped well below inner.height so text always
+                // keeps room to render; below 10 rows there isn't enough
+                // space for both, so skip the image entirely.
+                let (text_area, image_area) = if self.hero_image_path.is_some()
+                    && inner.height >= 10
+                {
+                    let image_height = (inner.height / 2)
+                        .clamp(4, 16)
+                        .min(inner.height.saturating_sub(6));
                     let chunks = Layout::vertical([
-                        Constraint::Length(18),
+                        Constraint::Length(image_height),
                         Constraint::Min(0),
                     ])
                     .split(inner);
@@ -338,15 +373,166 @@ impl DetailPanel {
                     (inner, None)
                 };
 
-                // Render image placeholder when no resolved path
-                // (actual ratatui-image rendering would be done by the app's event loop)
-
                 let text = render_listing_text(listing, self.img_idx, self.images.len());
                 let content = Paragraph::new(text)
                     .wrap(Wrap { trim: false })
                     .style(Style::default().bg(colors::BG_DETAIL));
                 Widget::render(content, text_area, buf);
+
+                image_area
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ListingStatus;
+    use chrono::Utc;
+
+    fn listing_with(id: &str, images: Vec<&str>, ai_evaluation: Option<&str>) -> Listing {
+        Listing {
+            id: id.to_string(),
+            profile_id: "p1".to_string(),
+            source_id: "ebay".to_string(),
+            title: "widget".to_string(),
+            description: String::new(),
+            price: None,
+            currency: "USD".to_string(),
+            condition: None,
+            url: "https://example.com/a".to_string(),
+            image_urls: images.into_iter().map(String::from).collect(),
+            location: None,
+            first_seen: Utc::now(),
+            last_seen: Utc::now(),
+            relevance_score: 0.0,
+            status: ListingStatus::New,
+            ai_evaluation: ai_evaluation.map(String::from),
+        }
+    }
+
+    #[test]
+    fn show_listing_reports_change_only_on_new_id() {
+        let mut panel = DetailPanel::new();
+        assert!(panel.show_listing(Some(listing_with("a", vec![], None))));
+        assert!(!panel.show_listing(Some(listing_with("a", vec![], None))));
+        assert!(panel.show_listing(Some(listing_with("b", vec![], None))));
+    }
+
+    #[test]
+    fn image_navigation_wraps() {
+        let mut panel = DetailPanel::new();
+        panel.show_listing(Some(listing_with("a", vec!["a.jpg", "b.jpg", "c.jpg"], None)));
+        assert_eq!(panel.image_index(), 0);
+        assert!(panel.next_image());
+        assert_eq!(panel.image_index(), 1);
+        assert!(panel.next_image());
+        assert!(panel.next_image());
+        assert_eq!(panel.image_index(), 0);
+        assert!(panel.prev_image());
+        assert_eq!(panel.image_index(), 2);
+    }
+
+    #[test]
+    fn image_navigation_noop_with_single_image() {
+        let mut panel = DetailPanel::new();
+        panel.show_listing(Some(listing_with("a", vec!["a.jpg"], None)));
+        assert!(!panel.next_image());
+        assert!(!panel.prev_image());
+        assert_eq!(panel.image_index(), 0);
+    }
+
+    #[test]
+    fn has_ai_notes_true_when_notable_or_reason_present() {
+        let mut panel = DetailPanel::new();
+        panel.show_listing(Some(listing_with("a", vec![], None)));
+        assert!(!panel.has_ai_notes());
+
+        panel.show_listing(Some(listing_with(
+            "b",
+            vec![],
+            Some(r#"{"notable": "", "reason": ""}"#),
+        )));
+        assert!(!panel.has_ai_notes());
+
+        panel.show_listing(Some(listing_with(
+            "c",
+            vec![],
+            Some(r#"{"notable": "rare", "reason": ""}"#),
+        )));
+        assert!(panel.has_ai_notes());
+    }
+
+    #[test]
+    fn set_gallery_preserves_current_url_and_hero_path() {
+        let mut panel = DetailPanel::new();
+        panel.show_listing(Some(listing_with("a", vec!["thumb.jpg"], None)));
+        panel.hero_image_path = Some(PathBuf::from("/tmp/thumb-cached.jpg"));
+
+        panel.set_gallery(vec![
+            "full1.jpg".to_string(),
+            "thumb.jpg".to_string(),
+            "full3.jpg".to_string(),
+        ]);
+
+        // Index follows the URL that was already showing...
+        assert_eq!(panel.image_index(), 1);
+        assert_eq!(panel.current_image_url(), Some("thumb.jpg"));
+        // ...and the hero path is left alone; only the caller (on an
+        // actual resolved download) is allowed to swap it.
+        assert!(panel.hero_image_path.is_some());
+    }
+
+    #[test]
+    fn set_gallery_falls_back_to_first_when_current_url_gone() {
+        let mut panel = DetailPanel::new();
+        panel.show_listing(Some(listing_with("a", vec!["thumb.jpg"], None)));
+        panel.set_gallery(vec!["full1.jpg".to_string(), "full2.jpg".to_string()]);
+        assert_eq!(panel.image_index(), 0);
+    }
+
+    #[test]
+    fn set_gallery_ignores_empty_images() {
+        let mut panel = DetailPanel::new();
+        panel.show_listing(Some(listing_with("a", vec!["thumb.jpg"], None)));
+        panel.set_gallery(vec![]);
+        assert_eq!(panel.current_image_url(), Some("thumb.jpg"));
+    }
+
+    #[test]
+    fn image_band_scales_with_terminal_and_leaves_text_room() {
+        let mut panel = DetailPanel::new();
+        panel.show_listing(Some(listing_with("a", vec!["a.jpg"], None)));
+        panel.hero_image_path = Some(PathBuf::from("/tmp/fake.jpg"));
+
+        // inner height = area.height - 2 (top/bottom border)
+        let area = Rect::new(0, 0, 40, 12); // inner = 10
+        let mut buf = Buffer::empty(area);
+        let image_area = panel.render(area, &mut buf, false);
+        let band = image_area.expect("band present at 10 inner rows").height;
+        assert!((4..=16).contains(&band));
+        assert!(band <= 10u16.saturating_sub(6));
+
+        let area = Rect::new(0, 0, 40, 42); // inner = 40
+        let mut buf = Buffer::empty(area);
+        let image_area = panel.render(area, &mut buf, false);
+        let band = image_area.expect("band present at 40 inner rows").height;
+        assert!((4..=16).contains(&band));
+        // Text always keeps at least 6 rows.
+        assert!(band <= 40u16 - 6);
+    }
+
+    #[test]
+    fn image_band_skipped_on_short_terminal() {
+        let mut panel = DetailPanel::new();
+        panel.show_listing(Some(listing_with("a", vec!["a.jpg"], None)));
+        panel.hero_image_path = Some(PathBuf::from("/tmp/fake.jpg"));
+
+        // inner height = 7, below the 10-row floor — no image band, but the
+        // panel must still render (returns None, not a zero-height Rect).
+        let area = Rect::new(0, 0, 40, 9);
+        let mut buf = Buffer::empty(area);
+        assert!(panel.render(area, &mut buf, false).is_none());
     }
 }

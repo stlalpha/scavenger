@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -f "${SCRIPT_DIR}/.env" ] && set -a && source "${SCRIPT_DIR}/.env" && set +a
 
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-CHROME_DATA="/tmp/scavenger-chrome"
+CHROME_DATA="${HOME}/Library/Application Support/scavenger/chrome"
 CDP_PORT=9222
 SOCKET="${HOME}/.run/scavenger/daemon.sock"
 DAEMON_LOG="${HOME}/.local/share/scavenger/daemon.log"

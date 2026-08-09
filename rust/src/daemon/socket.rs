@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -22,7 +22,9 @@ type PollHandler = Arc<
         + Sync,
 >;
 type ReloadHandler = Arc<
-    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
+        + Send
+        + Sync,
 >;
 type ShutdownHandler = Arc<dyn Fn() + Send + Sync>;
 
@@ -241,9 +243,24 @@ fn set_permissions(path: &Path, mode: u32) -> Result<(), BoxError> {
     Ok(())
 }
 
+const CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 async fn handle_connection(stream: tokio::net::UnixStream, handlers: &Handlers) -> Result<(), BoxError> {
+    match tokio::time::timeout(CONNECTION_TIMEOUT, handle_connection_inner(stream, handlers)).await {
+        Ok(result) => result,
+        Err(_) => Err("connection timed out waiting for request".into()),
+    }
+}
+
+async fn handle_connection_inner(
+    stream: tokio::net::UnixStream,
+    handlers: &Handlers,
+) -> Result<(), BoxError> {
     let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
+    // Cap the read itself rather than checking the length after the fact —
+    // read_line has no size limit of its own, so a peer that never sends a
+    // newline could otherwise buffer unbounded data into `line`.
+    let mut reader = BufReader::new(reader.take(MAX_INPUT as u64 + 1));
     let mut line = String::new();
 
     let bytes_read = reader.read_line(&mut line).await?;
@@ -251,7 +268,7 @@ async fn handle_connection(stream: tokio::net::UnixStream, handlers: &Handlers) 
         return Ok(());
     }
 
-    let response = if line.len() > MAX_INPUT {
+    let response = if bytes_read > MAX_INPUT {
         serde_json::json!({"status": "error", "message": "request too large"})
     } else {
         match serde_json::from_str::<serde_json::Value>(&line) {
@@ -302,10 +319,15 @@ async fn dispatch(request: serde_json::Value, handlers: &Handlers) -> serde_json
         }
         Some("reload") => {
             let handler = handlers.reload.lock().await;
-            if let Some(h) = handler.as_ref() {
-                h().await;
+            match handler.as_ref() {
+                Some(h) => match h().await {
+                    Ok(()) => {
+                        serde_json::json!({"status": "ok", "data": {"message": "config reloaded"}})
+                    }
+                    Err(message) => serde_json::json!({"status": "error", "message": message}),
+                },
+                None => serde_json::json!({"status": "ok", "data": {"message": "config reloaded"}}),
             }
-            serde_json::json!({"status": "ok", "data": {"message": "config reloaded"}})
         }
         Some("shutdown") => {
             let handler = handlers.shutdown.lock().await;

@@ -5,26 +5,21 @@ use std::path::PathBuf;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 
+use crate::tui::colors;
+
 const MAX_LINES: usize = 500;
-const CLR_BG: Color = Color::Rgb(0x18, 0x18, 0x18);
-const CLR_HDR: Color = Color::Rgb(0x75, 0x71, 0x5e);
-const CLR_ERROR: Color = Color::Rgb(0xf9, 0x26, 0x72);
-const CLR_WARN: Color = Color::Rgb(0xfd, 0x97, 0x1f);
-const CLR_INFO: Color = Color::Rgb(0x75, 0x71, 0x5e);
-const CLR_DIM: Color = Color::Rgb(0x3a, 0x3a, 0x3a);
-const CLR_DATA: Color = Color::Rgb(0x66, 0xd9, 0xef);
-const CLR_GREEN: Color = Color::Rgb(0xa6, 0xe2, 0x2e);
-const CLR_FG: Color = Color::Rgb(0xf8, 0xf8, 0xf2);
-const CLR_BOT_BG: Color = Color::Rgb(0x3a, 0x1a, 0x1a);
 
 pub struct LogPanelState {
     log_path: PathBuf,
     lines: VecDeque<String>,
     last_size: u64,
+    /// Lines scrolled back from the tail (0 = pinned to the live tail).
+    /// Driven by the mouse wheel over the log panel.
+    scroll_offset: usize,
 }
 
 impl LogPanelState {
@@ -33,6 +28,7 @@ impl LogPanelState {
             log_path,
             lines: VecDeque::with_capacity(MAX_LINES),
             last_size: 0,
+            scroll_offset: 0,
         };
         state.load_initial();
         state
@@ -86,12 +82,51 @@ impl LogPanelState {
         if self.lines.len() >= MAX_LINES {
             self.lines.pop_front();
         }
-        self.lines.push_back(line);
+        self.lines.push_back(strip_ansi(&line));
     }
 
     pub fn lines(&self) -> &VecDeque<String> {
         &self.lines
     }
+
+    /// Scroll back by `amount` lines, toward the start of the log.
+    pub fn scroll_up(&mut self, amount: usize) {
+        let max = self.lines.len().saturating_sub(1);
+        self.scroll_offset = (self.scroll_offset + amount).min(max);
+    }
+
+    /// Scroll forward by `amount` lines, toward the live tail.
+    pub fn scroll_down(&mut self, amount: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+    }
+}
+
+/// Remove ANSI escape sequences (CSI color codes etc.). The daemon now
+/// writes plain logs, but existing files — and anything else that appends
+/// here — may carry escapes, and ratatui renders them as garble: the ESC
+/// bytes break column math so lines overlap and `2m`/`0m` fragments leak.
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // CSI: ESC [ <params 0x30-0x3F> <intermediates 0x20-0x2F> <final 0x40-0x7E>
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if ('\u{40}'..='\u{7e}').contains(&c) {
+                    break;
+                }
+            }
+        } else {
+            // Two-char escape (ESC + single byte)
+            chars.next();
+        }
+    }
+    out
 }
 
 fn colorize_line(line: &str) -> Line<'_> {
@@ -104,42 +139,42 @@ fn colorize_line(line: &str) -> Line<'_> {
         return Line::from(Span::styled(
             line,
             Style::default()
-                .fg(CLR_ERROR)
+                .fg(colors::PINK)
                 .add_modifier(Modifier::BOLD),
         ));
     }
 
-    if line.contains(" WARNING ") {
+    if line.contains(" WARNING ") || line.contains(" WARN ") {
         if line.to_lowercase().contains("bot") || line.contains("Bot block") {
             return Line::from(Span::styled(
                 format!(" \u{25b8} {line}"),
                 Style::default()
-                    .fg(CLR_ERROR)
-                    .bg(CLR_BOT_BG)
+                    .fg(colors::PINK)
+                    .bg(colors::BOT_BLOCK_BG)
                     .add_modifier(Modifier::BOLD),
             ));
         }
-        return Line::from(Span::styled(line, Style::default().fg(CLR_WARN)));
+        return Line::from(Span::styled(line, Style::default().fg(colors::ORANGE)));
     }
 
     if line.contains(" INFO ") {
         if line.contains("Escalating") {
             return Line::from(Span::styled(
                 format!("  \u{2605} {line}"),
-                Style::default().fg(CLR_ERROR),
+                Style::default().fg(colors::PINK),
             ));
         }
         if line.contains("found") && line.contains("listings") {
-            return Line::from(Span::styled(line, Style::default().fg(CLR_GREEN)));
+            return Line::from(Span::styled(line, Style::default().fg(colors::GREEN)));
         }
         if line.contains("filter call:") || line.contains("frontier call:") {
-            return Line::from(Span::styled(line, Style::default().fg(CLR_DATA)));
+            return Line::from(Span::styled(line, Style::default().fg(colors::BLUE)));
         }
         if line.contains("filter response:") || line.contains("frontier response:") {
             return Line::from(Span::styled(
                 line,
                 Style::default()
-                    .fg(CLR_DATA)
+                    .fg(colors::BLUE)
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -147,20 +182,20 @@ fn colorize_line(line: &str) -> Line<'_> {
             return Line::from(Span::styled(
                 line,
                 Style::default()
-                    .fg(CLR_GREEN)
+                    .fg(colors::GREEN)
                     .add_modifier(Modifier::BOLD),
             ));
         }
         if line.contains("Daemon started") || line.contains("Connected to Chrome") {
-            return Line::from(Span::styled(line, Style::default().fg(CLR_FG)));
+            return Line::from(Span::styled(line, Style::default().fg(colors::TEXT_PRIMARY)));
         }
         if line.contains("executed successfully") {
-            return Line::from(Span::styled(line, Style::default().fg(CLR_DIM)));
+            return Line::from(Span::styled(line, Style::default().fg(colors::TEXT_DARK)));
         }
-        return Line::from(Span::styled(line, Style::default().fg(CLR_INFO)));
+        return Line::from(Span::styled(line, Style::default().fg(colors::TEXT_DIM)));
     }
 
-    Line::from(Span::styled(line, Style::default().fg(CLR_DIM)))
+    Line::from(Span::styled(line, Style::default().fg(colors::TEXT_DARK)))
 }
 
 pub struct LogPanelWidget<'a> {
@@ -177,32 +212,35 @@ impl<'a> LogPanelWidget<'a> {
 impl Widget for LogPanelWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let border_style = if self.focused {
-            Style::default().fg(Color::Rgb(0xfd, 0x97, 0x1f))
+            Style::default().fg(colors::ORANGE)
         } else {
-            Style::default().fg(Color::Rgb(0x22, 0x22, 0x22))
+            Style::default().fg(colors::INDICATOR_ACTIVE)
         };
 
         let block = Block::default()
             .title(Span::styled(
                 " LOG",
                 Style::default()
-                    .fg(CLR_HDR)
+                    .fg(colors::TEXT_DIM)
                     .add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::TOP)
             .border_style(border_style)
-            .style(Style::default().bg(CLR_BG));
+            .style(Style::default().bg(colors::BG_LOG));
 
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // Render visible tail of the log
+        // Render the tail of the log, scrolled back by `scroll_offset` lines.
         let visible = inner.height as usize;
+        let total = self.state.lines().len();
+        let skip_from_end = self.state.scroll_offset.min(total);
         let lines: Vec<Line> = self
             .state
             .lines()
             .iter()
             .rev()
+            .skip(skip_from_end)
             .take(visible)
             .collect::<Vec<_>>()
             .into_iter()
@@ -212,5 +250,58 @@ impl Widget for LogPanelWidget<'_> {
 
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
         paragraph.render(inner, buf);
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn scroll_up_bounded_by_line_count() {
+        let mut state = LogPanelState {
+            log_path: PathBuf::from("/nonexistent"),
+            lines: (0..5).map(|i| i.to_string()).collect(),
+            last_size: 0,
+            scroll_offset: 0,
+        };
+        state.scroll_up(2);
+        assert_eq!(state.scroll_offset, 2);
+        state.scroll_up(100);
+        assert_eq!(state.scroll_offset, 4); // len - 1
+    }
+
+    #[test]
+    fn scroll_down_bounded_at_zero() {
+        let mut state = LogPanelState {
+            log_path: PathBuf::from("/nonexistent"),
+            lines: (0..5).map(|i| i.to_string()).collect(),
+            last_size: 0,
+            scroll_offset: 3,
+        };
+        state.scroll_down(1);
+        assert_eq!(state.scroll_offset, 2);
+        state.scroll_down(100);
+        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn strip_ansi_cleans_tracing_output() {
+        // Verbatim shape of a tracing fmt line with ANSI enabled.
+        let dirty = "\u{1b}[2m2026-08-08T20:51:52.029457Z\u{1b}[0m \u{1b}[33m WARN\u{1b}[0m bot block detected \u{1b}[3mplugin\u{1b}[0m\u{1b}[2m=\u{1b}[0mebay";
+        assert_eq!(
+            strip_ansi(dirty),
+            "2026-08-08T20:51:52.029457Z  WARN bot block detected plugin=ebay"
+        );
+        // Plain lines pass through untouched.
+        let clean = "2026-08-08 INFO Craigslist sfbay: found 25 listings";
+        assert_eq!(strip_ansi(clean), clean);
+    }
+
+    #[test]
+    fn push_line_strips_ansi_on_ingest() {
+        let mut state = LogPanelState::new(std::path::PathBuf::from("/nonexistent"));
+        state.push_line("\u{1b}[32m INFO\u{1b}[0m daemon started".to_string());
+        assert_eq!(state.lines().back().unwrap(), " INFO daemon started");
     }
 }

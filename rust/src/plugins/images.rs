@@ -3,8 +3,6 @@ use reqwest::Client;
 use std::collections::HashSet;
 use std::sync::{LazyLock, OnceLock};
 
-use crate::plugins::PluginError;
-
 // eBay: gallery images embedded as JSON in page source
 static EBAY_IMG_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#""(https://i\.ebayimg\.com/images/g/[^"]+/s-l\d+\.\w+)""#).unwrap()
@@ -49,6 +47,18 @@ pub async fn fetch_listing_images(
     source_id: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     if url.is_empty() || !url.starts_with("http") {
+        return Ok(vec![]);
+    }
+
+    // Facebook item pages are login-gated and JS-rendered; a plain
+    // cookieless GET only reaches the logged-out wall, whose regex scrape
+    // yields Facebook's own UI images (logo/chrome), not the listing
+    // photos — and those junk images then replace the working card image
+    // in the detail panel. There is no useful gallery to fetch this way,
+    // so skip it and keep the card image. (A real FB gallery needs the
+    // logged-in CDP browser — see extract_facebook, still used if a page's
+    // HTML is ever provided through that path.)
+    if source_id == "facebook" {
         return Ok(vec![]);
     }
 
@@ -140,6 +150,19 @@ mod tests {
         assert_eq!(images.len(), 2);
         assert!(images[0].ends_with("_600x450.jpg"));
         assert!(images[1].ends_with("_600x450.jpg"));
+    }
+
+    #[tokio::test]
+    async fn facebook_gallery_fetch_is_skipped_no_network() {
+        // Must return empty without any HTTP request — the cookieless GET
+        // only reaches FB's login wall and its scrape is junk.
+        let out = fetch_listing_images(
+            "https://www.facebook.com/marketplace/item/123",
+            "facebook",
+        )
+        .await
+        .unwrap();
+        assert!(out.is_empty());
     }
 
     #[test]

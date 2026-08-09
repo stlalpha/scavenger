@@ -107,6 +107,18 @@ impl ProfileSidebar {
         }
     }
 
+    /// Maps a row within the list's content area (0 = first visible item,
+    /// below the border) to a profile index, honoring the current scroll
+    /// offset. Returns `None` if the row is past the last profile.
+    pub fn hit_test(&self, row: u16) -> Option<usize> {
+        let idx = self.state.offset() + row as usize;
+        if idx < self.profiles.len() {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
     pub fn unread(&self, profile_id: &str) -> usize {
         self.stats.get(profile_id).copied().unwrap_or(0)
     }
@@ -183,12 +195,18 @@ impl ProfileSidebar {
         Line::from(spans)
     }
 
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, focused: bool) {
         let items: Vec<ListItem> = self
             .profiles
             .iter()
             .map(|p| ListItem::new(self.render_label(p)))
             .collect();
+
+        let border_color = if focused {
+            colors::ORANGE
+        } else {
+            colors::INDICATOR_ACTIVE
+        };
 
         let list = List::new(items)
             .block(
@@ -199,11 +217,68 @@ impl ProfileSidebar {
                             .fg(colors::GREEN)
                             .add_modifier(Modifier::BOLD),
                     ))
-                    .border_style(Style::default().fg(colors::INDICATOR_ACTIVE))
+                    .border_style(Style::default().fg(border_color))
                     .style(Style::default().bg(colors::BG_SIDEBAR)),
             )
-            .highlight_style(Style::default().bg(colors::BG_SELECTED));
+            .highlight_style(Style::default().bg(if focused {
+                colors::BG_SELECTED
+            } else {
+                colors::BG_HIGHLIGHT
+            }));
 
         StatefulWidget::render(list, area, buf, &mut self.state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AlertPriority, KeywordGroup};
+
+    fn profile(id: &str) -> Profile {
+        Profile {
+            id: id.into(),
+            name: id.into(),
+            keywords: vec![KeywordGroup::Single("x".into())],
+            negative_keywords: vec![],
+            sources: vec!["ebay".into()],
+            price_min: None,
+            price_max: None,
+            poll_interval_sec: 3600,
+            alert_priority: AlertPriority::Normal,
+            enabled: true,
+            tags: vec![],
+            escalation_keywords: vec![],
+            location_radius_mi: None,
+        }
+    }
+
+    fn sidebar(n: usize) -> ProfileSidebar {
+        ProfileSidebar::new((0..n).map(|i| profile(&i.to_string())).collect())
+    }
+
+    #[test]
+    fn hit_test_maps_rows_at_zero_offset() {
+        let sb = sidebar(3);
+        assert_eq!(sb.hit_test(0), Some(0));
+        assert_eq!(sb.hit_test(1), Some(1));
+        assert_eq!(sb.hit_test(2), Some(2));
+        assert_eq!(sb.hit_test(3), None); // past the last profile
+    }
+
+    #[test]
+    fn hit_test_accounts_for_scroll_offset() {
+        let mut sb = sidebar(10);
+        *sb.state.offset_mut() = 3; // as if scrolled so profile 3 renders first
+        assert_eq!(sb.hit_test(0), Some(3));
+        assert_eq!(sb.hit_test(1), Some(4));
+        assert_eq!(sb.hit_test(6), Some(9));
+        assert_eq!(sb.hit_test(7), None);
+    }
+
+    #[test]
+    fn hit_test_empty_sidebar() {
+        let sb = sidebar(0);
+        assert_eq!(sb.hit_test(0), None);
     }
 }

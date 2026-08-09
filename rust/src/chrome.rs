@@ -5,8 +5,43 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 const CDP_PORT: u16 = 9222;
-const CHROME_DATA: &str = "/tmp/scavenger-chrome";
 const OWNER_FILE: &str = "owner.json";
+const LEGACY_CHROME_DATA: &str = "/tmp/scavenger-chrome";
+
+/// The Chrome profile holds marketplace logins (Facebook especially), so it
+/// lives in the durable data dir — /tmp is wiped on reboot, which cost a
+/// re-login every restart. Old profiles are migrated on first use.
+pub fn chrome_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".local/share")
+        })
+        .join("scavenger")
+        .join("chrome")
+}
+
+/// One-time migration of a legacy /tmp profile (with its cookies/logins)
+/// into the durable location. Best-effort: if the rename fails (e.g. the
+/// old dir is gone or crosses filesystems), Chrome just starts fresh.
+fn migrate_legacy_profile(dest: &PathBuf) {
+    let legacy = PathBuf::from(LEGACY_CHROME_DATA);
+    if !dest.exists() && legacy.is_dir() {
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        match std::fs::rename(&legacy, dest) {
+            Ok(()) => eprintln!(
+                "Migrated Chrome profile (with logins) from {LEGACY_CHROME_DATA} to {}",
+                dest.display()
+            ),
+            Err(e) => eprintln!(
+                "Could not migrate legacy Chrome profile from {LEGACY_CHROME_DATA}: {e} — starting fresh"
+            ),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChromeOwnershipState {
@@ -82,7 +117,7 @@ fn chrome_pid() -> Option<u32> {
 }
 
 fn owner_path() -> PathBuf {
-    PathBuf::from(CHROME_DATA).join(OWNER_FILE)
+    chrome_data_dir().join(OWNER_FILE)
 }
 
 fn read_owner() -> Option<ChromeOwner> {
@@ -91,7 +126,7 @@ fn read_owner() -> Option<ChromeOwner> {
 }
 
 fn write_owner(owner: &ChromeOwner) -> Result<(), String> {
-    std::fs::create_dir_all(CHROME_DATA)
+    std::fs::create_dir_all(chrome_data_dir())
         .map_err(|e| format!("Failed to create Chrome data dir: {e}"))?;
     let raw = serde_json::to_string_pretty(owner)
         .map_err(|e| format!("Failed to serialize Chrome ownership metadata: {e}"))?;
@@ -119,13 +154,24 @@ fn process_command(pid: u32) -> Option<String> {
     }
 }
 
+/// Pull one `--flag=value` out of a `ps -o command=` line. Values may
+/// contain spaces (the durable profile dir lives under "Application
+/// Support"), and ps doesn't quote them — so the value runs until the
+/// next ` --` flag or end of line. Whitespace-splitting can never match
+/// such an argument.
+fn extract_arg_value<'a>(command: &'a str, key: &str) -> Option<&'a str> {
+    let start = command.find(key)? + key.len();
+    let rest = &command[start..];
+    let end = rest.find(" --").unwrap_or(rest.len());
+    Some(rest[..end].trim())
+}
+
 fn command_matches_owner(command: &str, owner: &ChromeOwner) -> bool {
     let port_arg = format!("--remote-debugging-port={}", owner.port);
-    let user_data_arg = format!("--user-data-dir={}", owner.user_data_dir);
 
     owner.port == CDP_PORT
         && command.split_whitespace().any(|arg| arg == port_arg)
-        && command.split_whitespace().any(|arg| arg == user_data_arg)
+        && extract_arg_value(command, "--user-data-dir=") == Some(owner.user_data_dir.as_str())
 }
 
 fn classify_chrome(
@@ -231,11 +277,13 @@ pub fn start_chrome(headless: bool) -> Result<(), String> {
 
     let chrome = find_chrome().ok_or("Chrome not found. Install Google Chrome.")?;
 
-    std::fs::create_dir_all(CHROME_DATA).ok();
+    let data_dir = chrome_data_dir();
+    migrate_legacy_profile(&data_dir);
+    std::fs::create_dir_all(&data_dir).ok();
 
     let mut args = vec![
         format!("--remote-debugging-port={CDP_PORT}"),
-        format!("--user-data-dir={CHROME_DATA}"),
+        format!("--user-data-dir={}", data_dir.display()),
         "--no-first-run".to_string(),
         "--disable-default-apps".to_string(),
     ];
@@ -267,7 +315,7 @@ pub fn start_chrome(headless: bool) -> Result<(), String> {
                 spawned_pid: child.id(),
                 port: CDP_PORT,
                 chrome_path: chrome.to_string_lossy().into_owned(),
-                user_data_dir: CHROME_DATA.to_string(),
+                user_data_dir: chrome_data_dir().display().to_string(),
             };
             if let Err(e) = write_owner(&owner) {
                 let cleanup = terminate_started_chrome(pid);
@@ -344,12 +392,15 @@ mod tests {
             spawned_pid: pid,
             port: CDP_PORT,
             chrome_path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_string(),
-            user_data_dir: CHROME_DATA.to_string(),
+            user_data_dir: chrome_data_dir().display().to_string(),
         }
     }
 
     fn owned_command() -> String {
-        format!("Google Chrome --remote-debugging-port={CDP_PORT} --user-data-dir={CHROME_DATA}")
+        format!(
+            "Google Chrome --remote-debugging-port={CDP_PORT} --user-data-dir={}",
+            chrome_data_dir().display()
+        )
     }
 
     #[test]
@@ -362,12 +413,13 @@ mod tests {
             &owner
         ));
         assert!(!command_matches_owner(
-            &format!("Google Chrome --user-data-dir={CHROME_DATA}"),
+            &format!("Google Chrome --user-data-dir={}", chrome_data_dir().display()),
             &owner
         ));
         assert!(!command_matches_owner(
             &format!(
-                "Google Chrome --remote-debugging-port={CDP_PORT} --user-data-dir={CHROME_DATA}-other"
+                "Google Chrome --remote-debugging-port={CDP_PORT} --user-data-dir={}-other",
+                chrome_data_dir().display()
             ),
             &owner
         ));

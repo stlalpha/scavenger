@@ -118,13 +118,32 @@ impl EbayPlugin {
         keywords: &str,
         profile: &Profile,
     ) -> Result<Vec<Listing>, Box<dyn std::error::Error + Send + Sync>> {
-        // In production, `page` comes from browser.rs; here we define the logic
-        // that operates on a Page handle. The actual browser connection is
-        // managed externally.
-        let _ = (keywords, profile);
-        Err(Box::new(PluginError::Browser(
-            "browser integration requires runtime CDP connection".into(),
-        )))
+        // 60s timeout covers page acquisition and the entire scrape operation.
+        let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            let page = crate::plugins::browser::new_page()
+                .await
+                .map_err(|e| PluginError::Browser(e.to_string()))?;
+            let guard = crate::plugins::browser::PageGuard::new(page);
+
+            let page_ref = match guard.page() {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = guard.close().await;
+                    return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
+                }
+            };
+
+            let result = self.scrape_with_page(page_ref, keywords, profile).await;
+            let _ = guard.close().await;
+            result
+        })
+        .await
+        .unwrap_or_else(|_| {
+            warn!("eBay scrape timed out after 60s");
+            Ok(vec![])
+        });
+
+        result
     }
 
     /// Core scraping logic operating on a live CDP page.
@@ -150,9 +169,12 @@ impl EbayPlugin {
         debug!("eBay: page loaded, title={title:?}");
 
         if title.contains("Pardon Our Interruption") {
+            // Carry the blocked search URL — the challenge interstitial
+            // presents there, not on the homepage, and 'x' in the TUI opens
+            // exactly this URL for the manual solve.
             return Err(Box::new(PluginError::BotDetected {
                 plugin_id: "ebay".into(),
-                url: "https://www.ebay.com".into(),
+                url,
                 message: "eBay bot detection -- needs manual CAPTCHA".into(),
             }));
         }

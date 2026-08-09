@@ -79,10 +79,6 @@ fn parse_dt(s: &str) -> std::result::Result<DateTime<Utc>, chrono::ParseError> {
     s.parse::<DateTime<Utc>>()
 }
 
-fn parse_dt_opt(val: Option<String>) -> std::result::Result<Option<DateTime<Utc>>, chrono::ParseError> {
-    val.map(|s| parse_dt(&s)).transpose()
-}
-
 fn row_to_source_state(row: &Row<'_>) -> rusqlite::Result<SourceState> {
     let last_polled: Option<String> = row.get("last_polled")?;
     let rate_limit_until: Option<String> = row.get("rate_limit_until")?;
@@ -429,10 +425,8 @@ impl Database {
             let params: Vec<&dyn rusqlite::types::ToSql> =
                 chunk.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
             let rows = stmt.query_map(params.as_slice(), |row| row.get::<_, String>(0))?;
-            for row in rows {
-                if let Ok(id) = row {
-                    result.insert(id);
-                }
+            for id in rows.flatten() {
+                result.insert(id);
             }
         }
         Ok(result)
@@ -447,10 +441,38 @@ impl Database {
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
         })?;
-        for row in rows {
-            if let Ok((pid, count)) = row {
-                map.insert(pid, count);
-            }
+        for (pid, count) in rows.flatten() {
+            map.insert(pid, count);
+        }
+        Ok(map)
+    }
+
+    /// Same as `count_new_by_profile`, restricted to the given profile ids.
+    /// Used to keep totals (e.g. the status bar's "N new") from counting
+    /// orphaned rows left behind by a profile that was since deleted from
+    /// config but whose listings a deletion didn't reach.
+    pub fn count_new_by_profile_filtered(
+        &self,
+        profile_ids: &[String],
+    ) -> Result<HashMap<String, usize>> {
+        if profile_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders: String = profile_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT profile_id, COUNT(*) FROM listings \
+             WHERE status='new' AND profile_id IN ({}) GROUP BY profile_id",
+            placeholders
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            profile_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let mut map = HashMap::new();
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        })?;
+        for (pid, count) in rows.flatten() {
+            map.insert(pid, count);
         }
         Ok(map)
     }
@@ -506,5 +528,76 @@ impl Database {
             ],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_listing(id: &str, profile_id: &str) -> Listing {
+        Listing {
+            id: id.to_string(),
+            profile_id: profile_id.to_string(),
+            source_id: "ebay".to_string(),
+            title: "widget".to_string(),
+            description: String::new(),
+            price: None,
+            currency: "USD".to_string(),
+            condition: None,
+            url: format!("https://example.com/{id}"),
+            image_urls: Vec::new(),
+            location: None,
+            first_seen: Utc::now(),
+            last_seen: Utc::now(),
+            relevance_score: 0.0,
+            status: ListingStatus::New,
+            ai_evaluation: None,
+        }
+    }
+
+    #[test]
+    fn count_new_by_profile_filtered_excludes_orphaned_profiles() {
+        let db = Database::open(":memory:").unwrap();
+        db.init().unwrap();
+        db.upsert_listing(&sample_listing("a", "kept")).unwrap();
+        db.upsert_listing(&sample_listing("b", "kept")).unwrap();
+        db.upsert_listing(&sample_listing("c", "deleted")).unwrap();
+
+        let all = db.count_new_by_profile().unwrap();
+        assert_eq!(all.get("kept"), Some(&2));
+        assert_eq!(all.get("deleted"), Some(&1));
+
+        let filtered = db
+            .count_new_by_profile_filtered(&["kept".to_string()])
+            .unwrap();
+        assert_eq!(filtered.get("kept"), Some(&2));
+        assert_eq!(filtered.get("deleted"), None);
+    }
+
+    #[test]
+    fn count_new_by_profile_filtered_empty_ids_returns_empty_map() {
+        let db = Database::open(":memory:").unwrap();
+        db.init().unwrap();
+        db.upsert_listing(&sample_listing("a", "kept")).unwrap();
+
+        let filtered = db.count_new_by_profile_filtered(&[]).unwrap();
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn delete_profile_listings_removes_rows_and_price_history() {
+        let db = Database::open(":memory:").unwrap();
+        db.init().unwrap();
+        let mut l = sample_listing("a", "gone");
+        l.price = Some(100.0);
+        db.upsert_listing(&l).unwrap();
+        db.upsert_listing(&sample_listing("b", "kept")).unwrap();
+
+        let deleted = db.delete_profile_listings("gone").unwrap();
+        assert_eq!(deleted, 1);
+        assert!(db.get_listing("a").unwrap().is_none());
+        assert!(db.get_listing("b").unwrap().is_some());
+        assert!(db.get_price_history("a").unwrap().is_empty());
     }
 }
