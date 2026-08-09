@@ -49,6 +49,9 @@ pub struct ThumbnailCache {
     cache_dir: PathBuf,
     max_age: Duration,
     client: reqwest::Client,
+    /// Reused across download_sync calls — building a fresh blocking client
+    /// per download leaks connection pools and repeats TLS setup.
+    blocking_client: reqwest::blocking::Client,
     resolved: HashMap<String, PathBuf>,
     /// Insertion-ordered keys for LRU eviction.
     insertion_order: Vec<String>,
@@ -62,10 +65,16 @@ impl ThumbnailCache {
             .user_agent(USER_AGENT)
             .build()
             .unwrap_or_default();
+        let blocking_client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent(USER_AGENT)
+            .build()
+            .unwrap_or_default();
         Self {
             cache_dir,
             max_age: Duration::from_secs(DEFAULT_MAX_AGE_DAYS * 86400),
             client,
+            blocking_client,
             resolved: HashMap::new(),
             insertion_order: Vec::new(),
         }
@@ -173,11 +182,8 @@ impl ThumbnailCache {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).ok();
         }
-        let response = reqwest::blocking::Client::builder()
-            .user_agent(USER_AGENT)
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .ok()?
+        let response = self
+            .blocking_client
             .get(url)
             .send()
             .ok()?

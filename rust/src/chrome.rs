@@ -299,7 +299,7 @@ pub fn start_chrome(headless: bool) -> Result<(), String> {
         eprintln!("\x1b[1mStarting Chrome (visible)...\x1b[0m");
     }
 
-    let child = Command::new(&chrome)
+    let mut child = Command::new(&chrome)
         .args(&args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -332,6 +332,11 @@ pub fn start_chrome(headless: bool) -> Result<(), String> {
         }
     }
 
+    // Timed out: the process we spawned started but never bound the CDP
+    // port. Reap it so it doesn't linger holding the profile lock and get
+    // misclassified as an External Chrome on the next start.
+    let _ = child.kill();
+    let _ = child.wait();
     Err("Chrome failed to start within 5 seconds".to_string())
 }
 

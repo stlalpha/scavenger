@@ -115,9 +115,28 @@ pub struct HeroImageCache {
     path: Option<PathBuf>,
     area: Rect,
     protocol: Option<ratatui_image::protocol::Protocol>,
-    /// The last (path, area) that failed to decode/protocol-encode — skipped
+    /// The last (path, area, fs-signature) that failed to decode — skipped
     /// on subsequent frames instead of retrying a doomed decode ~10x/sec.
-    failed: Option<(PathBuf, Rect)>,
+    /// The fs-signature (mtime, len) is part of the key so that when a
+    /// still-downloading file finishes at the same path, the changed file
+    /// no longer matches the poisoned entry and gets decoded.
+    failed: Option<FailedDecode>,
+}
+
+/// (path, target area, file fs-signature) identifying a failed decode.
+type FailedDecode = (PathBuf, Rect, Option<(u64, u64)>);
+
+/// (mtime-secs, len) for a file, or None if it can't be stat'd. Used to
+/// tell "the same failed file" from "the file changed since it failed".
+fn fs_signature(path: &Path) -> Option<(u64, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    let mtime = m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Some((mtime, m.len()))
 }
 
 impl HeroImageCache {
@@ -153,10 +172,11 @@ impl HeroImageCache {
         {
             return;
         }
+        let sig = fs_signature(img_path);
         if self
             .failed
             .as_ref()
-            .is_some_and(|(p, a)| p.as_path() == img_path && *a == area)
+            .is_some_and(|(p, a, s)| p.as_path() == img_path && *a == area && *s == sig)
         {
             return;
         }
@@ -168,7 +188,7 @@ impl HeroImageCache {
             .map_err(|e| e.to_string())
             .and_then(|r| r.decode().map_err(|e| e.to_string()))
         else {
-            self.failed = Some((img_path.to_path_buf(), area));
+            self.failed = Some((img_path.to_path_buf(), area, sig));
             return;
         };
 
@@ -183,7 +203,7 @@ impl HeroImageCache {
                 self.failed = None;
             }
             Err(_) => {
-                self.failed = Some((img_path.to_path_buf(), area));
+                self.failed = Some((img_path.to_path_buf(), area, sig));
             }
         }
     }
@@ -267,19 +287,26 @@ mod tests {
         let area = Rect::new(0, 0, 20, 10);
         cache.ensure(&bad_path, area);
         assert!(cache.protocol.is_none());
-        assert_eq!(cache.failed, Some((bad_path.clone(), area)));
+        let sig_v1 = cache.failed.clone();
+        assert!(matches!(&sig_v1, Some((p, a, _)) if *p == bad_path && *a == area));
 
-        // Same (path, area) short-circuits — removing the file proves the
-        // retry path isn't taken (a real retry would still just fail, but
-        // this confirms `ensure` doesn't touch the filesystem again).
-        std::fs::remove_file(&bad_path).unwrap();
+        // Unchanged file at the same (path, area): short-circuits — the
+        // recorded failure signature is identical, so no re-decode.
         cache.ensure(&bad_path, area);
-        assert!(cache.protocol.is_none());
-        assert_eq!(cache.failed, Some((bad_path.clone(), area)));
+        assert_eq!(cache.failed, sig_v1);
 
-        // A different area invalidates the failed-cache entry and retries.
+        // The file changed at the same path (a download finishing is the
+        // real case). The fs-signature differs, so the poisoned entry no
+        // longer matches and `ensure` retries — proven by the recorded
+        // signature updating to the new file.
+        std::fs::write(&bad_path, b"still not an image but a different length").unwrap();
+        cache.ensure(&bad_path, area);
+        assert!(cache.failed.is_some());
+        assert_ne!(cache.failed, sig_v1, "changed file must be retried, not permanently poisoned");
+
+        // A different area also invalidates the entry and retries.
         let other_area = Rect::new(0, 0, 20, 20);
         cache.ensure(&bad_path, other_area);
-        assert_eq!(cache.failed, Some((bad_path, other_area)));
+        assert!(matches!(&cache.failed, Some((_, a, _)) if *a == other_area));
     }
 }

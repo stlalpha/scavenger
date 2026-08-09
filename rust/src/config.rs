@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -5,6 +6,40 @@ use serde::Deserialize;
 use crate::error::{Result, ScavengerError};
 use crate::ai::models::AIConfig;
 use crate::models::Profile;
+
+/// Write `contents` to `path` atomically: write a temp file in the same
+/// directory, fsync it, then rename it over the destination (an atomic
+/// operation on the same filesystem). A crash or disk error can no longer
+/// leave a truncated or empty config — the old file survives intact until
+/// the rename succeeds.
+fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config.toml".to_string());
+    let tmp = dir.join(format!(".{file_name}.tmp.{}", std::process::id()));
+
+    let write_tmp = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()?;
+        Ok(())
+    };
+    if let Err(e) = write_tmp() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(ScavengerError::Config(format!("Cannot write config: {e}")));
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(ScavengerError::Config(format!("Cannot write config: {e}")));
+    }
+    // Best-effort durability of the rename itself.
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GlobalConfig {
@@ -256,8 +291,7 @@ pub fn append_profile(path: &Path, profile: &Profile) -> Result<Profile> {
         arr.push(table);
     }
 
-    std::fs::write(path, doc.to_string())
-        .map_err(|e| ScavengerError::Config(format!("Cannot write config: {e}")))?;
+    atomic_write(path, &doc.to_string())?;
 
     Ok(profile.clone())
 }
@@ -299,8 +333,7 @@ pub fn update_profile(path: &Path, profile: &Profile) -> Result<Profile> {
     }
     doc.insert("profiles", toml_edit::Item::ArrayOfTables(new_arr));
 
-    std::fs::write(path, doc.to_string())
-        .map_err(|e| ScavengerError::Config(format!("Cannot write config: {e}")))?;
+    atomic_write(path, &doc.to_string())?;
 
     Ok(profile.clone())
 }
@@ -332,8 +365,7 @@ pub fn delete_profile(path: &Path, profile_id: &str) -> Result<()> {
     }
     doc.insert("profiles", toml_edit::Item::ArrayOfTables(new_arr));
 
-    std::fs::write(path, doc.to_string())
-        .map_err(|e| ScavengerError::Config(format!("Cannot write config: {e}")))?;
+    atomic_write(path, &doc.to_string())?;
 
     Ok(())
 }
@@ -353,5 +385,23 @@ mod tests {
     fn test_expand_tilde() {
         let p = expand_tilde("~/.config/scavenger/config.toml");
         assert!(!p.to_str().unwrap().starts_with('~'));
+    }
+
+    #[test]
+    fn atomic_write_replaces_and_leaves_no_temp() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "old contents").unwrap();
+
+        atomic_write(&path, "new contents").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new contents");
+
+        // No leftover temp file in the directory (the rename consumed it).
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "temp file left behind: {leftovers:?}");
     }
 }

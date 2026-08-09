@@ -136,6 +136,24 @@ fn run_gallery_worker(rx: mpsc::Receiver<GalleryJob>, tx: mpsc::Sender<ImgResult
     }
 }
 
+/// Daemon-status worker — polls the daemon socket on its own thread and
+/// pushes each report over a channel, so the render thread never blocks on
+/// the (up to 1s) socket round-trip. Exits when the App (holding the rx)
+/// drops. Polls immediately, then every `interval`.
+fn run_status_worker(
+    socket_path: PathBuf,
+    tx: mpsc::Sender<DaemonStatusReport>,
+    interval: Duration,
+) {
+    loop {
+        let report = App::fetch_daemon_status(&socket_path);
+        if tx.send(report).is_err() {
+            break; // App dropped
+        }
+        std::thread::sleep(interval);
+    }
+}
+
 /// Mouse hit-testing against a splitter bar's column/row, with ±1 tolerance
 /// — an exact match is unreliable on some terminals' mouse reporting.
 fn near(actual: u16, target: u16) -> bool {
@@ -227,6 +245,12 @@ pub struct App {
     /// already-scraped image set instead of re-fetching it.
     gallery_cache: HashMap<String, Vec<String>>,
 
+    // Daemon status is fetched on a background thread (run_status_worker)
+    // and delivered here — the socket round-trip must never block the
+    // render loop. `last_status` holds the most recent report so the UI
+    // renders a stable snapshot between updates.
+    status_rx: mpsc::Receiver<DaemonStatusReport>,
+
     // Timers
     last_db_poll: Instant,
     last_log_poll: Instant,
@@ -257,6 +281,14 @@ impl App {
         std::thread::spawn(move || run_thumb_worker(thumb_rx, thumb_result_tx, cache_dir));
         std::thread::spawn(move || run_gallery_worker(gallery_rx, worker_tx));
 
+        // Background daemon-status poller — keeps the socket round-trip off
+        // the render thread.
+        let (status_tx, status_rx) = mpsc::channel::<DaemonStatusReport>();
+        let status_socket = config.socket_path();
+        std::thread::spawn(move || {
+            run_status_worker(status_socket, status_tx, DB_POLL_INTERVAL)
+        });
+
         Ok(Self {
             config,
             config_path,
@@ -280,6 +312,7 @@ impl App {
             pending_thumb_urls: HashSet::new(),
             gallery_pending: None,
             gallery_cache: HashMap::new(),
+            status_rx,
             log_state: LogPanelState::new(log_path),
             status_state: StatusBarState::default(),
             last_db_poll: Instant::now() - DB_POLL_INTERVAL, // force immediate poll
@@ -1020,28 +1053,34 @@ impl App {
             self.status_state.last_poll_iso = Some(ts);
         }
 
-        // Check daemon status
-        let (daemon_up, active_polls, daemon_profile_ids, bot_blocks, ai, polling) =
-            self.check_daemon_status();
-        self.status_state.daemon_up = daemon_up;
-        self.status_state.active_polls = active_polls;
-        self.status_state.bot_blocks = bot_blocks;
-        self.status_state.ai = ai;
-        // Resolve polling profile ids to display names (fall back to the id).
-        self.status_state.polling = polling
-            .into_iter()
-            .map(|(pid, src)| {
-                let name = self
-                    .config
-                    .profiles
-                    .iter()
-                    .find(|p| p.id == pid)
-                    .map(|p| p.name.clone())
-                    .unwrap_or(pid);
-                (name, src)
-            })
-            .collect();
-        self.sidebar.set_daemon_profiles(daemon_profile_ids);
+        // Apply the latest daemon-status report from the background worker
+        // (drain to the newest; never blocks the render thread).
+        let mut latest = None;
+        while let Ok(report) = self.status_rx.try_recv() {
+            latest = Some(report);
+        }
+        if let Some((daemon_up, active_polls, daemon_profile_ids, bot_blocks, ai, polling)) = latest
+        {
+            self.status_state.daemon_up = daemon_up;
+            self.status_state.active_polls = active_polls;
+            self.status_state.bot_blocks = bot_blocks;
+            self.status_state.ai = ai;
+            // Resolve polling profile ids to display names (fall back to id).
+            self.status_state.polling = polling
+                .into_iter()
+                .map(|(pid, src)| {
+                    let name = self
+                        .config
+                        .profiles
+                        .iter()
+                        .find(|p| p.id == pid)
+                        .map(|p| p.name.clone())
+                        .unwrap_or(pid);
+                    (name, src)
+                })
+                .collect();
+            self.sidebar.set_daemon_profiles(daemon_profile_ids);
+        }
 
         // Update poll interval from active profile
         if let Some(pid) = active_profile_id {
@@ -1053,9 +1092,12 @@ impl App {
 
     /// Returns (daemon_up, active poll source ids, profile ids the daemon
     /// currently knows about, (source_id, blocked url) pairs from bot_blocks).
-    fn check_daemon_status(&self) -> DaemonStatusReport {
-        let socket_path = self.config.socket_path();
-        let Ok(mut stream) = UnixStream::connect(&socket_path) else {
+    ///
+    /// Free function (not a method) so the background status worker can call
+    /// it off the render thread — the socket round-trip blocks up to 1s and
+    /// must never run inside `terminal.draw`.
+    fn fetch_daemon_status(socket_path: &std::path::Path) -> DaemonStatusReport {
+        let Ok(mut stream) = UnixStream::connect(socket_path) else {
             return (false, vec![], vec![], vec![], None, vec![]);
         };
         stream
